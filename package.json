@@ -2,7 +2,7 @@
   "name": "pybricks-runner",
   "displayName": "Pybricks Runner",
   "description": "Program LEGO SPIKE Prime and EV3 robots using Pybricks",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "publisher": "AnandSingh",
   "icon": "pybricks-runner-icon.png",
   "engines": {
@@ -46,55 +46,148 @@
     "commands": [
       {
         "command": "pybricks.run",
-        "title": "🚀 Run on LEGO Brick"
+        "title": "Run on LEGO Brick",
+        "category": "Pybricks",
+        "icon": "$(rocket)"
       },
       {
         "command": "pybricks.selectRobot",
-        "title": "🔧 Select LEGO Robot"
+        "title": "Select LEGO Robot",
+        "category": "Pybricks",
+        "icon": "$(settings-gear)"
+      },
+      {
+        "command": "pybricks.scanDevices",
+        "title": "Scan for Devices",
+        "category": "Pybricks",
+        "icon": "$(search)"
       },
       {
         "command": "pybricks.refreshDevices",
-        "title": "Pybricks: Refresh Devices"
+        "title": "Refresh Device List",
+        "category": "Pybricks",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "pybricks.addRobot",
+        "title": "Add Robot by Name",
+        "category": "Pybricks",
+        "icon": "$(add)"
       },
       {
         "command": "pybricks.connect",
-        "title": "Pybricks: Connect"
+        "title": "Select This Device",
+        "category": "Pybricks",
+        "icon": "$(plug)"
       },
       {
         "command": "pybricks.disconnect",
-        "title": "Pybricks: Disconnect"
+        "title": "Deselect Device",
+        "category": "Pybricks",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "pybricks.forgetDevice",
+        "title": "Remove from Saved List",
+        "category": "Pybricks",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "pybricks.manageSavedDevices",
+        "title": "Remove Saved Robots...",
+        "category": "Pybricks",
+        "icon": "$(list-selection)"
+      },
+      {
+        "command": "pybricks.clearSavedDevices",
+        "title": "Remove All Saved Robots",
+        "category": "Pybricks",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "pybricks.showLog",
+        "title": "Show Log",
+        "category": "Pybricks",
+        "icon": "$(output)"
       },
       {
         "command": "pybricks.showDebugInfo",
-        "title": "Pybricks: Show Debug Info"
+        "title": "Show Debug Info",
+        "category": "Pybricks",
+        "icon": "$(bug)"
       }
     ],
     "menus": {
       "editor/title": [
         {
           "command": "pybricks.run",
-          "group": "navigation"
+          "group": "navigation",
+          "when": "resourceExtname == .py"
         },
         {
           "command": "pybricks.selectRobot",
-          "group": "navigation"
+          "group": "navigation",
+          "when": "resourceExtname == .py"
         }
       ],
       "view/title": [
         {
-          "command": "pybricks.refreshDevices",
+          "command": "pybricks.scanDevices",
           "when": "view == pybricks.devices",
           "group": "navigation@1"
+        },
+        {
+          "command": "pybricks.addRobot",
+          "when": "view == pybricks.devices",
+          "group": "navigation@2"
+        },
+        {
+          "command": "pybricks.refreshDevices",
+          "when": "view == pybricks.devices",
+          "group": "1_list@1"
+        },
+        {
+          "command": "pybricks.manageSavedDevices",
+          "when": "view == pybricks.devices",
+          "group": "2_manage@1"
+        },
+        {
+          "command": "pybricks.clearSavedDevices",
+          "when": "view == pybricks.devices",
+          "group": "2_manage@2"
+        },
+        {
+          "command": "pybricks.showLog",
+          "when": "view == pybricks.devices",
+          "group": "3_debug@1"
         }
       ],
       "view/item/context": [
         {
+          "command": "pybricks.forgetDevice",
+          "when": "view == pybricks.devices && viewItem =~ /\\.saved\\b/",
+          "group": "inline@1"
+        },
+        {
           "command": "pybricks.connect",
-          "when": "view == pybricks.devices && viewItem == disconnected"
+          "when": "view == pybricks.devices && viewItem =~ /\\.unselected\\b/",
+          "group": "1_select@1"
         },
         {
           "command": "pybricks.disconnect",
-          "when": "view == pybricks.devices && viewItem == connected"
+          "when": "view == pybricks.devices && viewItem =~ /\\.selected\\b/",
+          "group": "1_select@1"
+        },
+        {
+          "command": "pybricks.forgetDevice",
+          "when": "view == pybricks.devices && viewItem =~ /\\.saved\\b/",
+          "group": "2_remove@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "pybricks.forgetDevice",
+          "when": "false"
         }
       ]
     },
@@ -105,9 +198,32 @@
           "type": "string",
           "default": "",
           "description": "Default robot (BLE name) to auto-select."
+        },
+        "pybricksRunner.scanTimeout": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 60,
+          "description": "How long, in seconds, to scan for nearby hubs."
+        },
+        "pybricksRunner.showAllBluetoothDevices": {
+          "type": "boolean",
+          "default": false,
+          "description": "Report every named Bluetooth LE device, not just LEGO hubs. Useful for troubleshooting a hub that does not show up."
+        },
+        "pybricksRunner.scanOnStartup": {
+          "type": "boolean",
+          "default": false,
+          "description": "Scan for nearby hubs automatically when the extension activates."
         }
       }
-    }
+    },
+    "viewsWelcome": [
+      {
+        "view": "pybricks.devices",
+        "contents": "No robots yet.\n\nPower on your hub and hold its Bluetooth button until it blinks, then scan.\n[Scan for Devices](command:pybricks.scanDevices)\n\nAlready know the name? Add it directly.\n[Add Robot by Name](command:pybricks.addRobot)"
+      }
+    ]
   },
   "scripts": {
     "lint": "eslint .",

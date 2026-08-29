@@ -2,6 +2,46 @@
 
 All notable changes to the "pybricks-runner" extension will be documented in this file.
 
+## [0.4.0] - 2026-08-29
+
+### 🔍 Working device scanning + device list management
+
+#### Fixed
+- **Device scanning never worked.** The extension shelled out to `pybricksdev devices`,
+  which is not a real subcommand (`pybricksdev` provides `compile`, `run`, `flash`, `dfu`,
+  `oad`, `lwp3` and `udev`). The command always failed and the error was swallowed, so the
+  Devices view only ever showed names that had been typed in by hand.
+- Scanning now uses `scripts/ble_scan.py`, which drives `bleak` — already a dependency of
+  `pybricksdev`, so no extra install is needed — and filters on the Pybricks service UUID.
+- Selecting a device from the tree's right-click menu passed the tree item object instead of
+  the device name, storing `[object Object]` as the robot name. Names are now resolved from
+  either form.
+- Scan failures are reported instead of silently producing an empty list, with detail in the
+  new **Pybricks Runner** output channel.
+- The Selected Robot webview no longer interpolates the robot name into HTML unescaped.
+
+#### Added
+- **Pybricks: Scan for Devices** — BLE scan showing nearby hubs with signal strength.
+- **Remove from Saved List** — trash icon on any saved device in the Devices view, and next
+  to saved entries in the Select LEGO Robot quick pick.
+- **Remove Saved Robots...** — multi-select bulk removal.
+- **Remove All Saved Robots** — clears the list after a confirmation prompt.
+- **Add Robot by Name** — add a hub directly when you already know its name.
+- **Show Log** — opens the output channel.
+- Welcome view with Scan / Add buttons when no devices are known yet.
+- Devices are tagged `nearby` / `saved` / `selected`, and LEGO hubs still running stock
+  firmware are flagged as having no Pybricks firmware.
+- Settings: `pybricksRunner.scanTimeout`, `pybricksRunner.showAllBluetoothDevices`,
+  `pybricksRunner.scanOnStartup`.
+
+#### Changed
+- Devices found by a scan are no longer added to the saved list automatically; a hub is
+  remembered when you select it. This keeps the saved list something you curate.
+- **Deselect Device** (formerly Disconnect) now clears the selection, so `run` stops passing
+  a stale `--name`. Removing the selected robot does the same.
+- The Devices view title button now scans; **Refresh Device List** redraws without rescanning.
+
+
 ## [0.3.2] - 2025-10-31
 
 ### 🎯 Simplification Release

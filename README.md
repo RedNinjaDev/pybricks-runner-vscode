@@ -17,10 +17,53 @@
 
 - **One-click programming:** Run your Python code on LEGO robots with a single click
 - **Activity bar integration:** Dedicated sidebar with device management
-- **Device scanning:** Automatically detect nearby LEGO robots
+- **Bluetooth device scanning:** Discover nearby hubs by their advertised BLE name, with signal strength
+- **Manage your robot list:** Remove robots you no longer use, one at a time or in bulk
 - **Simple integration:** Uses the `pybricksdev` CLI tool via VS Code terminal
 - **Immediate feedback:** See output and errors directly in the integrated terminal
 - **Easy robot selection:** Quickly switch between different robots
+
+### Scanning for devices
+
+Press **Scan for Devices** (the magnifier in the *Devices* view title bar) to look for
+hubs that are currently advertising over Bluetooth LE. Power the hub on and hold its
+Bluetooth button until it blinks, then scan.
+
+Results are tagged so you can tell what you are looking at:
+
+| Tag | Meaning |
+| --- | --- |
+| `nearby (-55 dBm)` | Advertising right now; the number is signal strength, closer to 0 is stronger |
+| `saved` | Remembered from earlier, but not seen in the last scan |
+| `selected` | The hub that `Run on LEGO Brick` will target |
+| `no Pybricks firmware` | A LEGO hub still running stock firmware — flash Pybricks before running programs on it |
+
+Hubs found by a scan are *not* saved automatically; a hub is remembered once you select it.
+If a hub never appears, set `pybricksRunner.showAllBluetoothDevices` to `true` to list every
+named BLE device, which makes it obvious whether the adapter is working at all.
+
+### Removing old devices
+
+Robot names accumulate over time. To clean them up:
+
+- **One device:** hover it in the *Devices* view and click the 🗑 icon (or right-click → *Remove from Saved List*)
+- **Several at once:** *Devices* view `...` menu → *Remove Saved Robots...*, then tick the ones to drop
+- **Everything:** *Devices* view `...` menu → *Remove All Saved Robots* (asks for confirmation)
+- **While picking a robot:** the trash icon next to any saved entry in the *Select LEGO Robot* quick pick
+
+Removing the robot that is currently selected resets the selection, so `pybricksdev run`
+stops being passed a stale `--name`.
+
+### Settings
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| `pybricksRunner.scanTimeout` | `5` | How long, in seconds, to scan for nearby hubs |
+| `pybricksRunner.showAllBluetoothDevices` | `false` | Report every named BLE device, not just LEGO hubs |
+| `pybricksRunner.scanOnStartup` | `false` | Scan automatically when the extension activates |
+
+If a scan fails, the reason is shown and also written to the **Pybricks Runner** output
+channel (*Devices* view `...` menu → *Show Log*).
 
 ## Screenshots
 

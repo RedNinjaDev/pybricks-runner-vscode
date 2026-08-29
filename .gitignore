@@ -5,3 +5,5 @@ node_modules
 *.log
 .DS_Store
 extension-old-backup.js
+__pycache__/
+*.pyc
