@@ -96,7 +96,16 @@ class Agent:
 		timeout = float(msg.get("timeout", 15))
 
 		self.emit(event="state", state="connecting", name=name)
-		device = await find_device(name, timeout=timeout)
+		try:
+			device = await find_device(name, timeout=timeout)
+		except asyncio.TimeoutError:
+			# bleak raises TimeoutError with an empty message, which surfaces to
+			# the user as a bare "TimeoutError:".
+			target = f' named "{name}"' if name else ""
+			raise RuntimeError(
+				f"no Pybricks hub{target} found within {timeout:g}s. "
+				"Power the hub on and hold its Bluetooth button until it blinks."
+			) from None
 
 		hub = PybricksHubBLE(device)
 		self.subscriptions.append(hub.stdout_observable.subscribe(self._on_stdout))
@@ -271,8 +280,10 @@ class Agent:
 			await handler(msg)
 			self.emit(event="result", id=msg.get("id"), ok=True)
 		except Exception as e:  # noqa: BLE001 - reported to the extension verbatim
+			# Some exceptions (notably bleak's TimeoutError) carry no message.
+			detail = str(e).strip()
 			self.emit(event="result", id=msg.get("id"), ok=False,
-			          error=f"{type(e).__name__}: {e}")
+			          error=f"{type(e).__name__}: {detail}" if detail else type(e).__name__)
 
 	async def serve(self):
 		self.emit(event="ready")

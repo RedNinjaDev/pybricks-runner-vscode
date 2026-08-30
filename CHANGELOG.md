@@ -2,6 +2,22 @@
 
 All notable changes to the "pybricks-runner" extension will be documented in this file.
 
+## [0.4.4] - 2026-08-30
+
+### Fixed
+- Failing to find a hub reported a bare `TimeoutError:` with no message, because
+  that is how bleak raises it. Connecting to a hub that is not advertising now says
+  which hub was looked for, for how long, and what to do about it. Exceptions with
+  no message no longer render as `SomeError:` with a dangling colon.
+
+### Verified against real hardware
+- `scripts/ble_scan.py` and `scripts/hub_agent.py` were run against pybricksdev
+  2.3.2 and a real Bluetooth adapter: scanning returns live devices, service-UUID
+  classification works, and every pybricksdev API this extension depends on
+  (`find_device`, `PybricksHubBLE`, `run`, `stop_user_program`, `status_observable`,
+  `StatusFlag`) matches the signatures assumed here.
+
+
 ## [0.4.3] - 2026-08-30
 
 ### Fixed
