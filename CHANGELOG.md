@@ -2,6 +2,41 @@
 
 All notable changes to the "pybricks-runner" extension will be documented in this file.
 
+## [0.5.0] - 2026-08-30
+
+### 🔌 Hold a connection to the hub
+
+Previously every run was a fresh `pybricksdev run ble`: scan, connect, upload, run,
+disconnect. The hub dropped back into advertising mode after each program and every run
+paid the discovery cost again.
+
+The extension can now hold the connection open.
+
+#### Added
+- **Connect to Hub / Disconnect from Hub** — opens a real BLE connection. The hub leaves
+  advertising mode (solid light) and stays connected until you disconnect.
+- Programs are sent over the held connection, skipping the per-run connect handshake.
+- **Pybricks Hub** terminal showing streamed program output.
+- **Stop Running Program** — halts the program without dropping the connection.
+- Connection status in the status bar; click to connect or disconnect.
+- `scripts/hub_agent.py`, a helper process that owns the connection and speaks
+  newline-delimited JSON with the extension.
+- Setting: `pybricksRunner.connectTimeout`.
+
+#### Changed
+- `pybricks.connect` / `pybricks.disconnect` meant *select* / *deselect*, which is
+  confusing now that connecting is a real operation. They are renamed
+  `pybricks.selectDevice` / `pybricks.deselectDevice`, and `pybricks.connectHub` /
+  `pybricks.disconnectHub` do the actual connecting.
+- **Run on LEGO Brick** sends over the open connection when connected, and otherwise falls
+  back to `pybricksdev run ble` exactly as before.
+- Running now saves the active file first — the hub reads it from disk, so unsaved edits
+  were previously uploaded stale.
+- Because a hub accepts one connection at a time, selecting a different robot, forgetting
+  the connected robot, or clearing the list disconnects first and says so.
+- Scanning while connected warns that the hub has stopped advertising and will not appear.
+
+
 ## [0.4.0] - 2026-08-29
 
 ### 🔍 Working device scanning + device list management
