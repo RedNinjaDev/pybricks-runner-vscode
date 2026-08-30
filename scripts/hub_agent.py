@@ -35,6 +35,12 @@ STOP_TIMEOUT = 3.0
 POLL_INTERVAL = 0.1
 # How long to wait for the hub's first real STATUS_REPORT after connecting.
 STATUS_TIMEOUT = 2.0
+# How long to allow for download + start before treating the hub as stalled. Only
+# this phase is timed; once the program is actually running it may take as long as
+# it likes. See https://github.com/pybricks/support/issues/1145 - the hub sometimes
+# fails to answer a write-with-response during download, which hangs the transfer.
+START_TIMEOUT = 30.0
+START_ATTEMPTS = 2
 
 
 class Agent:
@@ -232,11 +238,20 @@ class Agent:
 				running = True
 				self.emit(event="program", status="running", path=path)
 
+		loop = asyncio.get_running_loop()
+		started_event = asyncio.Event()
+
+		def on_status_started(flags):
+			if int(flags) & StatusFlag.USER_PROGRAM_RUNNING and not started_event.is_set():
+				# May be called from a BLE callback thread.
+				loop.call_soon_threadsafe(started_event.set)
+
 		subscription = self.hub.status_observable.subscribe(on_status)
+		started_sub = self.hub.status_observable.subscribe(on_status_started)
 		try:
 			# print_output=False is required: the hub's stdout must not be written
 			# to our stdout, which carries the JSON protocol.
-			await self.hub.run(path, wait=True, print_output=False)
+			await self._run_with_stall_recovery(path, started_event, float(msg.get("timeout") or START_TIMEOUT))
 		except Exception as e:
 			# Observed on hardware: the hub rejects a program download with GATT
 			# application error 0x81 while a program is still running. Translate it
@@ -249,11 +264,75 @@ class Agent:
 				) from e
 			raise
 		finally:
-			try:
-				subscription.dispose()
-			except Exception:  # noqa: BLE001
-				pass
+			for sub in (subscription, started_sub):
+				try:
+					sub.dispose()
+				except Exception:  # noqa: BLE001
+					pass
 			self.emit(event="program", status="finished", started=running)
+
+	async def _run_with_stall_recovery(self, path, started_event, start_timeout):
+		"""Run a program, treating a stalled download as recoverable.
+
+		Only download+start is timed: once the hub reports the program running the
+		call waits as long as the program takes. A stall is retried once after
+		stopping, which is the manual "press Stop and try again" workaround.
+		"""
+		last_error = None
+
+		for attempt in range(1, START_ATTEMPTS + 1):
+			started_event.clear()
+			run_task = asyncio.create_task(
+				self.hub.run(path, wait=True, print_output=False)
+			)
+			wait_started = asyncio.create_task(started_event.wait())
+
+			done, _ = await asyncio.wait(
+				{run_task, wait_started},
+				timeout=start_timeout,
+				return_when=asyncio.FIRST_COMPLETED,
+			)
+			wait_started.cancel()
+
+			if run_task in done:
+				# Short program that finished before the status flag was seen, or
+				# a failure - either way surface the outcome.
+				return await run_task
+
+			if started_event.is_set():
+				# Downloaded and started; the program may now take as long as it likes.
+				return await run_task
+
+			# Neither happened within the window: the transfer is stuck.
+			run_task.cancel()
+			try:
+				await run_task
+			except (asyncio.CancelledError, Exception):  # noqa: BLE001
+				pass
+
+			last_error = (
+				f"the hub stopped responding while the program was being sent "
+				f"(no progress for {start_timeout:g}s)"
+			)
+
+			if attempt < START_ATTEMPTS:
+				self.emit(event="notice", text=(
+					"Transfer to the hub stalled - this is a known Pybricks issue "
+					"(pybricks/support#1145), most often seen on Windows. "
+					"Stopping and retrying once."
+				))
+				try:
+					await self.hub.stop_user_program()
+				except Exception:  # noqa: BLE001
+					pass
+				await asyncio.sleep(0.5)
+
+		raise RuntimeError(
+			f"{last_error}. This is a known Pybricks firmware/Bluetooth issue "
+			"(pybricks/support#1145) rather than a fault in this extension. "
+			"Disconnect and reconnect the hub, reduce the number of other Bluetooth "
+			"devices in use, and make sure the hub firmware is up to date."
+		)
 
 	async def cmd_stop(self, msg):
 		if self.hub is None:

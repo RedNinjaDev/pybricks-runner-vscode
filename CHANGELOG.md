@@ -2,6 +2,30 @@
 
 All notable changes to the "pybricks-runner" extension will be documented in this file.
 
+## [0.4.6] - 2026-08-30
+
+### Added
+- **Recovery from a stalled program transfer.** Sending a program to the hub can hang
+  partway through: the hub sometimes fails to answer a write-with-response, because a
+  status notification races the write response. This is an upstream Pybricks
+  firmware/Bluetooth issue ([pybricks/support#1145](https://github.com/pybricks/support/issues/1145),
+  [discussion #1142](https://github.com/orgs/pybricks/discussions/1142)) reported most
+  often on Windows, and it is not specific to this extension — plain
+  `pybricksdev run ble` hangs the same way.
+
+  The transfer is now given a time budget (`pybricksRunner.startTimeout`, default 30s).
+  If the program has not started within it, the extension stops the hub and retries
+  once — automating the "press Stop, then Run again" workaround. If the retry also
+  stalls, the run fails with an explanation and a link rather than hanging forever.
+
+  Only the transfer is timed. Once the hub reports the program running, it may run for
+  as long as it likes; verified on hardware with a 30s program under a 5s budget.
+
+### Added setting
+- `pybricksRunner.startTimeout` — seconds allowed for sending a program before the
+  transfer is treated as stalled.
+
+
 ## [0.4.5] - 2026-08-30
 
 ### Verified on hardware (SPIKE Prime, Pybricks, pybricksdev 2.3.2, BlueZ)

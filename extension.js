@@ -790,8 +790,9 @@ function activate(context) {
 	const runOnConnectedHub = async filePath => {
 		hubWrite('');
 		if (hubTerminal) hubTerminal.show(true);
+		const startTimeout = Math.max(5, vscode.workspace.getConfiguration('pybricksRunner').get('startTimeout', 30));
 		try {
-			await agent.send('run', { path: filePath });
+			await agent.send('run', { path: filePath, timeout: startTimeout });
 		} catch (e) {
 			hub.programRunning = false;
 			hub.programState = 'idle';

@@ -2,7 +2,7 @@
   "name": "pybricks-runner",
   "displayName": "Pybricks Runner",
   "description": "Program LEGO SPIKE Prime and EV3 robots using Pybricks",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "publisher": "AnandSingh",
   "icon": "pybricks-runner-icon.png",
   "engines": {
@@ -305,6 +305,13 @@
           "minimum": 1,
           "maximum": 120,
           "description": "How long, in seconds, to look for the hub when connecting."
+        },
+        "pybricksRunner.startTimeout": {
+          "type": "number",
+          "default": 30,
+          "minimum": 5,
+          "maximum": 300,
+          "description": "How long, in seconds, to allow for sending a program to the hub before treating the transfer as stalled. Only the transfer is timed; a running program is never interrupted."
         }
       }
     },
