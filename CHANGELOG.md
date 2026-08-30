@@ -2,7 +2,7 @@
 
 All notable changes to the "pybricks-runner" extension will be documented in this file.
 
-## [0.5.0] - 2026-08-30
+## [0.4.1] - 2026-08-30
 
 ### 🔌 Hold a connection to the hub
 
