@@ -14,7 +14,7 @@ let output;
 let lastScan = { devices: [], error: null, at: 0 };
 
 // Live connection state, driven by events from the hub agent.
-let hub = { state: 'disconnected', name: null, address: null, programRunning: false };
+let hub = { state: 'disconnected', name: null, address: null, programRunning: false, programState: 'idle' };
 
 function log(message) {
 	if (output) output.appendLine(`[${new Date().toLocaleTimeString()}] ${message}`);
@@ -392,7 +392,9 @@ class SelectedRobotView {
 
 		const robotName = escapeHtml(getRobotName());
 		const status = hub.state === 'connected'
-			? (hub.programRunning ? 'Connected — program running' : 'Connected')
+			? (hub.programState === 'running' ? 'Connected — program running'
+				: hub.programState === 'uploading' ? 'Connected — uploading'
+				: 'Connected')
 			: hub.state === 'connecting' ? 'Connecting...' : 'Not connected';
 		const color = hub.state === 'connected'
 			? 'var(--vscode-testing-iconPassed, #3fb950)'
@@ -476,7 +478,7 @@ class DevicesProvider {
 		this.devices = [];
 	}
 	refresh() {
-		this.devices = buildDeviceList().map(d => new DeviceItem({ ...d, programRunning: hub.programRunning }));
+		this.devices = buildDeviceList().map(d => new DeviceItem({ ...d, programState: hub.programState }));
 		this._onDidChangeTreeData.fire();
 	}
 	getTreeItem(e) { return e; }
@@ -592,7 +594,7 @@ function pickRobot(onListChanged) {
 function activate(context) {
 	globalState = context.globalState;
 	extensionPath = context.extensionPath;
-	hub = { state: 'disconnected', name: null, address: null, programRunning: false };
+	hub = { state: 'disconnected', name: null, address: null, programRunning: false, programState: 'idle' };
 	lastScan = { devices: [], error: null, at: 0 };
 
 	output = vscode.window.createOutputChannel('Pybricks Runner');
@@ -623,9 +625,11 @@ function activate(context) {
 		runStatusItem.text = '$(rocket) Run on ' + getRobotName();
 
 		if (hub.state === 'connected') {
-			connectionStatusItem.text = hub.programRunning
+			connectionStatusItem.text = hub.programState === 'running'
 				? `$(debug-stop) ${hub.name}: running`
-				: `$(vm-active) ${hub.name}: connected`;
+				: hub.programState === 'uploading'
+					? `$(sync~spin) ${hub.name}: uploading`
+					: `$(vm-active) ${hub.name}: connected`;
 			connectionStatusItem.tooltip = 'Connected. Click to disconnect.';
 		} else if (hub.state === 'connecting') {
 			connectionStatusItem.text = '$(sync~spin) Connecting...';
@@ -657,6 +661,7 @@ function activate(context) {
 					hub.name = null;
 					hub.address = null;
 					hub.programRunning = false;
+					hub.programState = 'idle';
 				}
 				refreshUi();
 				break;
@@ -666,13 +671,31 @@ function activate(context) {
 				break;
 
 			case 'program':
-				hub.programRunning = event.status === 'started';
 				if (event.status === 'started') {
+					hub.programRunning = true;
+					hub.programState = 'uploading';
 					hubWrite(`\r\n\x1b[36m▶ ${path.basename(event.path || '')}\x1b[0m\r\n`);
+				} else if (event.status === 'running') {
+					hub.programState = 'running';
 				} else {
-					hubWrite('\r\n\x1b[90m■ Program finished\x1b[0m\r\n');
+					hub.programRunning = false;
+					hub.programState = 'idle';
+					// started=false means the hub never reported the program as
+					// running, so say so rather than implying it ran.
+					hubWrite(event.started === false
+						? '\r\n\x1b[33m■ Ended without starting\x1b[0m\r\n'
+						: '\r\n\x1b[90m■ Program finished\x1b[0m\r\n');
 				}
 				refreshUi();
+				break;
+
+			case 'notice':
+				hubWrite(`\r\n\x1b[33m! ${event.text}\x1b[0m\r\n`);
+				log(event.text);
+				break;
+
+			case 'log':
+				log(`[agent] ${event.text}`);
 				break;
 
 			case 'fatal':
@@ -752,6 +775,7 @@ function activate(context) {
 		hub.state = 'disconnected';
 		hub.name = null;
 		hub.programRunning = false;
+		hub.programState = 'idle';
 		refreshUi();
 	};
 
@@ -762,6 +786,7 @@ function activate(context) {
 			await agent.send('run', { path: filePath });
 		} catch (e) {
 			hub.programRunning = false;
+			hub.programState = 'idle';
 			refreshUi();
 			vscode.window.showErrorMessage(`Run failed: ${e.message}`);
 		}

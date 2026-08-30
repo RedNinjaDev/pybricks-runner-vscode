@@ -2,6 +2,29 @@
 
 All notable changes to the "pybricks-runner" extension will be documented in this file.
 
+## [0.4.2] - 2026-08-30
+
+### Fixed
+- **Running a program over a held connection could hang without starting it.**
+  `hub.run()` downloads the program, sends START, then waits for the hub's
+  `USER_PROGRAM_RUNNING` flag to clear. Firmware ignores START while a program is
+  already running, so if the hub was busy when Run was pressed, the new program was
+  never started and the wait blocked on a stop that never came — the UI reported a
+  running program while the motors sat still. Pressing Stop cleared the flag, which
+  is why stopping and retrying appeared to fix it. The agent now stops any program
+  still running on the hub before starting the new one.
+- If the hub does not clear the flag after a stop, the run fails with a message
+  suggesting a power-cycle instead of blocking indefinitely.
+
+### Changed
+- The UI distinguishes **uploading** from **running**: the "running" state is now
+  driven by the hub's own status flag rather than assumed as soon as the upload
+  begins, so a stalled program can no longer be reported as running. A program that
+  ends without ever starting is reported as "Ended without starting".
+- Hub status flags are written to the Pybricks Runner log on connect and before each
+  run, and a new internal `status` command reports them on demand.
+
+
 ## [0.4.1] - 2026-08-30
 
 ### 🔌 Hold a connection to the hub

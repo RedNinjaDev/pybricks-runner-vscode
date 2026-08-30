@@ -30,6 +30,10 @@ import json
 import sys
 import threading
 
+# How long to wait for the hub to clear its user-program-running flag.
+STOP_TIMEOUT = 3.0
+POLL_INTERVAL = 0.1
+
 
 class Agent:
 	def __init__(self):
@@ -102,11 +106,45 @@ class Agent:
 
 		self.hub = hub
 		self.device_name = getattr(device, "name", None) or name
+		self.emit(event="log", text=f"hub status at connect: {self._status_flags():#x}")
 		self.emit(
 			event="state",
 			state="connected",
 			name=self.device_name,
 			address=getattr(device, "address", None),
+		)
+
+	def _status_flags(self):
+		try:
+			return int(self.hub.status_observable.value)
+		except Exception:  # noqa: BLE001 - diagnostics must never break a run
+			return 0
+
+	async def _ensure_idle(self):
+		"""Stop any program already running on the hub.
+
+		hub.run() downloads, sends START, then waits for the user-program-running
+		flag to go false. Firmware ignores START while a program is running, so
+		if the hub is busy when run() is called it waits on a stop that never
+		comes: the new program never starts and the call hangs. Clearing the flag
+		first is what makes the run take effect.
+		"""
+		from pybricksdev.ble.pybricks import StatusFlag
+
+		if not (self._status_flags() & StatusFlag.USER_PROGRAM_RUNNING):
+			return False
+
+		self.emit(event="notice", text="A program was already running on the hub; stopping it first.")
+		await self.hub.stop_user_program()
+
+		for _ in range(int(STOP_TIMEOUT / POLL_INTERVAL)):
+			await asyncio.sleep(POLL_INTERVAL)
+			if not (self._status_flags() & StatusFlag.USER_PROGRAM_RUNNING):
+				return True
+
+		raise RuntimeError(
+			"the hub still reports a program running after stop; "
+			"power-cycle the hub and reconnect"
 		)
 
 	async def cmd_run(self, msg):
@@ -119,19 +157,49 @@ class Agent:
 		if not path:
 			raise RuntimeError("no program path given")
 
+		from pybricksdev.ble.pybricks import StatusFlag
+
 		self.run_task = asyncio.current_task()
+		self.emit(event="log", text=f"hub status before run: {self._status_flags():#x}")
+		await self._ensure_idle()
+
+		# "started" means the upload has begun; "running" is emitted once the hub
+		# actually reports the program as running, so the UI cannot claim a
+		# program is running while it is in fact stalled.
 		self.emit(event="program", status="started", path=path)
+
+		running = False
+
+		def on_status(flags):
+			nonlocal running
+			if not running and (int(flags) & StatusFlag.USER_PROGRAM_RUNNING):
+				running = True
+				self.emit(event="program", status="running", path=path)
+
+		subscription = self.hub.status_observable.subscribe(on_status)
 		try:
 			# print_output=False is required: the hub's stdout must not be written
 			# to our stdout, which carries the JSON protocol.
 			await self.hub.run(path, wait=True, print_output=False)
 		finally:
-			self.emit(event="program", status="finished")
+			try:
+				subscription.dispose()
+			except Exception:  # noqa: BLE001
+				pass
+			self.emit(event="program", status="finished", started=running)
 
 	async def cmd_stop(self, msg):
 		if self.hub is None:
 			raise RuntimeError("not connected")
 		await self.hub.stop_user_program()
+
+	async def cmd_status(self, msg):
+		self.emit(
+			event="status",
+			connected=self.hub is not None,
+			name=self.device_name,
+			flags=self._status_flags(),
+		)
 
 	async def cmd_disconnect(self, msg):
 		if self.hub is None:
