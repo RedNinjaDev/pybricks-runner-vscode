@@ -41,6 +41,11 @@ STATUS_TIMEOUT = 2.0
 # fails to answer a write-with-response during download, which hangs the transfer.
 START_TIMEOUT = 30.0
 START_ATTEMPTS = 2
+# Every write-with-response can stall: the hub sometimes never sends the response
+# (pybricks/support#1145). Nothing may await one indefinitely.
+WRITE_TIMEOUT = 10.0
+CONNECT_TIMEOUT = 30.0
+DISCONNECT_TIMEOUT = 10.0
 
 
 class Agent:
@@ -133,7 +138,7 @@ class Agent:
 		self.subscriptions.append(hub.status_observable.subscribe(on_status))
 
 		try:
-			await hub.connect()
+			await self._bounded(hub.connect(), CONNECT_TIMEOUT, "the connection request")
 		except Exception:
 			self._dispose_subscriptions()
 			raise
@@ -147,6 +152,17 @@ class Agent:
 			name=self.device_name,
 			address=getattr(device, "address", None),
 		)
+
+	async def _bounded(self, awaitable, timeout, what):
+		"""Await a hub operation that could stall forever waiting for a response."""
+		try:
+			return await asyncio.wait_for(awaitable, timeout)
+		except asyncio.TimeoutError:
+			raise RuntimeError(
+				f"the hub did not respond to {what} within {timeout:g}s. This is the "
+				"known Pybricks write-response stall (pybricks/support#1145). "
+				"Disconnect and reconnect the hub, and reduce other Bluetooth activity."
+			) from None
 
 	def _status_flags(self):
 		try:
@@ -197,7 +213,7 @@ class Agent:
 			return False
 
 		self.emit(event="notice", text="A program was already running on the hub; stopping it first.")
-		await self.hub.stop_user_program()
+		await self._bounded(self.hub.stop_user_program(), WRITE_TIMEOUT, "the stop command")
 
 		for _ in range(int(STOP_TIMEOUT / POLL_INTERVAL)):
 			await asyncio.sleep(POLL_INTERVAL)
@@ -322,9 +338,9 @@ class Agent:
 					"Stopping and retrying once."
 				))
 				try:
-					await self.hub.stop_user_program()
-				except Exception:  # noqa: BLE001
-					pass
+					await self._bounded(self.hub.stop_user_program(), WRITE_TIMEOUT, "the stop command")
+				except Exception as stop_error:  # noqa: BLE001
+					self.emit(event="log", text=f"stop before retry did not complete: {stop_error}")
 				await asyncio.sleep(0.5)
 
 		raise RuntimeError(
@@ -337,7 +353,7 @@ class Agent:
 	async def cmd_stop(self, msg):
 		if self.hub is None:
 			raise RuntimeError("not connected")
-		await self.hub.stop_user_program()
+		await self._bounded(self.hub.stop_user_program(), WRITE_TIMEOUT, "the stop command")
 
 	async def cmd_status(self, msg):
 		self.emit(
@@ -355,7 +371,12 @@ class Agent:
 			return
 		hub, self.hub = self.hub, None
 		self._dispose_subscriptions()
-		await hub.disconnect()
+		try:
+			await asyncio.wait_for(hub.disconnect(), DISCONNECT_TIMEOUT)
+		except asyncio.TimeoutError:
+			# Upstream reports bleak getting stuck in disconnect. The link is gone
+			# from our point of view either way.
+			self.emit(event="log", text=f"disconnect did not complete within {DISCONNECT_TIMEOUT:g}s")
 		self.emit(event="state", state="disconnected", reason="requested")
 
 	# -- dispatch ----------------------------------------------------------

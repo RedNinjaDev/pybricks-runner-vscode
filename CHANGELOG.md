@@ -2,6 +2,22 @@
 
 All notable changes to the "pybricks-runner" extension will be documented in this file.
 
+## [0.4.8] - 2026-08-30
+
+### Fixed
+- **A stalled write could hang the connected Run path indefinitely.** Every command
+  the agent sends the hub is a write-with-response, and the hub sometimes never sends
+  that response ([pybricks/support#1145](https://github.com/pybricks/support/issues/1145)).
+  Four of those awaits had no timeout, the worst being the `stop_user_program()` call
+  the extension makes before every run when the hub reports a program already running.
+  That call sits *before* the transfer budget added in 0.4.6, so the stall recovery
+  never got a chance to act and Run appeared to hang forever.
+
+  Connect, stop and disconnect are now all bounded. A stalled write is reported as
+  the known upstream issue instead of blocking; a stalled disconnect still drops the
+  connection. Nothing in the agent awaits the hub without a deadline.
+
+
 ## [0.4.7] - 2026-08-30
 
 ### Fixed
