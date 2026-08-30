@@ -40,7 +40,6 @@ STATUS_TIMEOUT = 2.0
 # it likes. See https://github.com/pybricks/support/issues/1145 - the hub sometimes
 # fails to answer a write-with-response during download, which hangs the transfer.
 START_TIMEOUT = 30.0
-START_ATTEMPTS = 2
 # Every write-with-response can stall: the hub sometimes never sends the response
 # (pybricks/support#1145). Nothing may await one indefinitely.
 WRITE_TIMEOUT = 10.0
@@ -189,42 +188,6 @@ class Agent:
 				return True
 		return False
 
-	async def _ensure_idle(self):
-		"""Stop any program already running on the hub.
-
-		hub.run() downloads, sends START, then waits for the user-program-running
-		flag to go false. Firmware ignores START while a program is running, so
-		if the hub is busy when run() is called it waits on a stop that never
-		comes: the new program never starts and the call hangs. Clearing the flag
-		first is what makes the run take effect.
-		"""
-		from pybricksdev.ble.pybricks import StatusFlag
-
-		if not await self._await_status():
-			# Proceed anyway rather than refusing to run, but say so: if the run
-			# then hangs, this line in the log is the explanation.
-			self.emit(event="log", text=(
-				"hub sent no status report within "
-				f"{STATUS_TIMEOUT}s; cannot tell whether a program is running"
-			))
-			return False
-
-		if not (self._status_flags() & StatusFlag.USER_PROGRAM_RUNNING):
-			return False
-
-		self.emit(event="notice", text="A program was already running on the hub; stopping it first.")
-		await self._bounded(self.hub.stop_user_program(), WRITE_TIMEOUT, "the stop command")
-
-		for _ in range(int(STOP_TIMEOUT / POLL_INTERVAL)):
-			await asyncio.sleep(POLL_INTERVAL)
-			if not (self._status_flags() & StatusFlag.USER_PROGRAM_RUNNING):
-				return True
-
-		raise RuntimeError(
-			"the hub still reports a program running after stop; "
-			"power-cycle the hub and reconnect"
-		)
-
 	async def cmd_run(self, msg):
 		if self.hub is None:
 			raise RuntimeError("not connected")
@@ -239,39 +202,36 @@ class Agent:
 
 		self.run_task = asyncio.current_task()
 		self.emit(event="log", text=f"hub status before run: {self._describe_status()}")
-		await self._ensure_idle()
 
-		# "started" means the upload has begun; "running" is emitted once the hub
-		# actually reports the program as running, so the UI cannot claim a
-		# program is running while it is in fact stalled.
 		self.emit(event="program", status="started", path=path)
-
-		running = False
-
-		def on_status(flags):
-			nonlocal running
-			if not running and (int(flags) & StatusFlag.USER_PROGRAM_RUNNING):
-				running = True
-				self.emit(event="program", status="running", path=path)
 
 		loop = asyncio.get_running_loop()
 		started_event = asyncio.Event()
+		state = {"running": False, "baseline": None}
 
-		def on_status_started(flags):
-			if int(flags) & StatusFlag.USER_PROGRAM_RUNNING and not started_event.is_set():
-				# May be called from a BLE callback thread.
+		def on_status(flags):
+			# status_observable is a BehaviorSubject: subscribing replays whatever
+			# the flag is right now. That value describes the state BEFORE this run,
+			# so it is only a baseline. Treating it as "the program started" would
+			# report a running program before anything was uploaded and would skip
+			# the transfer budget below. Only a clear -> set transition counts.
+			is_running = bool(int(flags) & StatusFlag.USER_PROGRAM_RUNNING)
+			if state["baseline"] is None:
+				state["baseline"] = is_running
+				return
+			if is_running and not state["baseline"] and not state["running"]:
+				state["running"] = True
+				self.emit(event="program", status="running", path=path)
 				loop.call_soon_threadsafe(started_event.set)
+			state["baseline"] = is_running
 
 		subscription = self.hub.status_observable.subscribe(on_status)
-		started_sub = self.hub.status_observable.subscribe(on_status_started)
 		try:
-			# print_output=False is required: the hub's stdout must not be written
-			# to our stdout, which carries the JSON protocol.
-			await self._run_with_stall_recovery(path, started_event, float(msg.get("timeout") or START_TIMEOUT))
+			await self._run_with_start_budget(
+				path, started_event, float(msg.get("timeout") or START_TIMEOUT)
+			)
 		except Exception as e:
-			# Observed on hardware: the hub rejects a program download with GATT
-			# application error 0x81 while a program is still running. Translate it
-			# rather than surfacing a raw bleak exception.
+			# The hub rejects a program download while a program is running.
 			text = str(e)
 			if "0x81" in text or "Application-specific" in text:
 				raise RuntimeError(
@@ -280,74 +240,42 @@ class Agent:
 				) from e
 			raise
 		finally:
-			for sub in (subscription, started_sub):
-				try:
-					sub.dispose()
-				except Exception:  # noqa: BLE001
-					pass
-			self.emit(event="program", status="finished", started=running)
-
-	async def _run_with_stall_recovery(self, path, started_event, start_timeout):
-		"""Run a program, treating a stalled download as recoverable.
-
-		Only download+start is timed: once the hub reports the program running the
-		call waits as long as the program takes. A stall is retried once after
-		stopping, which is the manual "press Stop and try again" workaround.
-		"""
-		last_error = None
-
-		for attempt in range(1, START_ATTEMPTS + 1):
-			started_event.clear()
-			run_task = asyncio.create_task(
-				self.hub.run(path, wait=True, print_output=False)
-			)
-			wait_started = asyncio.create_task(started_event.wait())
-
-			done, _ = await asyncio.wait(
-				{run_task, wait_started},
-				timeout=start_timeout,
-				return_when=asyncio.FIRST_COMPLETED,
-			)
-			wait_started.cancel()
-
-			if run_task in done:
-				# Short program that finished before the status flag was seen, or
-				# a failure - either way surface the outcome.
-				return await run_task
-
-			if started_event.is_set():
-				# Downloaded and started; the program may now take as long as it likes.
-				return await run_task
-
-			# Neither happened within the window: the transfer is stuck.
-			run_task.cancel()
 			try:
-				await run_task
-			except (asyncio.CancelledError, Exception):  # noqa: BLE001
+				subscription.dispose()
+			except Exception:  # noqa: BLE001
 				pass
+			self.emit(event="program", status="finished", started=state["running"])
 
-			last_error = (
-				f"the hub stopped responding while the program was being sent "
-				f"(no progress for {start_timeout:g}s)"
-			)
+	async def _run_with_start_budget(self, path, started_event, start_timeout):
+		"""Run a program, bounding only the transfer.
 
-			if attempt < START_ATTEMPTS:
-				self.emit(event="notice", text=(
-					"Transfer to the hub stalled - this is a known Pybricks issue "
-					"(pybricks/support#1145), most often seen on Windows. "
-					"Stopping and retrying once."
-				))
-				try:
-					await self._bounded(self.hub.stop_user_program(), WRITE_TIMEOUT, "the stop command")
-				except Exception as stop_error:  # noqa: BLE001
-					self.emit(event="log", text=f"stop before retry did not complete: {stop_error}")
-				await asyncio.sleep(0.5)
+		Once the hub reports the program actually running the call waits as long as
+		the program takes. If it never starts, fail rather than block forever.
+		"""
+		run_task = asyncio.create_task(self.hub.run(path, wait=True, print_output=False))
+		wait_started = asyncio.create_task(started_event.wait())
+
+		done, _ = await asyncio.wait(
+			{run_task, wait_started},
+			timeout=start_timeout,
+			return_when=asyncio.FIRST_COMPLETED,
+		)
+		wait_started.cancel()
+
+		if run_task in done or started_event.is_set():
+			return await run_task
+
+		run_task.cancel()
+		try:
+			await run_task
+		except (asyncio.CancelledError, Exception):  # noqa: BLE001
+			pass
 
 		raise RuntimeError(
-			f"{last_error}. This is a known Pybricks firmware/Bluetooth issue "
-			"(pybricks/support#1145) rather than a fault in this extension. "
-			"Disconnect and reconnect the hub, reduce the number of other Bluetooth "
-			"devices in use, and make sure the hub firmware is up to date."
+			f"the hub did not start the program within {start_timeout:g}s. Every write "
+			"pybricksdev makes waits for a response from the hub, and the hub sometimes "
+			"never sends one (pybricks/support#1145). Press Stop, or disconnect and "
+			"reconnect the hub."
 		)
 
 	async def cmd_stop(self, msg):
