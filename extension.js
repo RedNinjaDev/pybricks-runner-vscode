@@ -247,7 +247,15 @@ class HubAgent {
 		this.proc.stdout.setEncoding('utf8');
 		this.proc.stdout.on('data', chunk => this._consume(chunk));
 		this.proc.stderr.setEncoding('utf8');
-		this.proc.stderr.on('data', chunk => log(`[agent stderr] ${String(chunk).trim()}`));
+		this.proc.stderr.on('data', chunk => {
+			// pybricksdev renders a tqdm progress bar to stderr while downloading a
+			// program. It is not an error and would swamp the log on every run.
+			for (const line of String(chunk).split(/[\r\n]+/)) {
+				const text = line.trim();
+				if (!text || /^\d{1,3}%\|/.test(text)) continue;
+				log(`[agent stderr] ${text}`);
+			}
+		});
 
 		this.proc.on('error', err => this._die(`agent failed to start: ${err.message}`));
 		this.proc.on('exit', (code, signal) => {

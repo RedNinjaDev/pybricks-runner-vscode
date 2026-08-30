@@ -237,6 +237,17 @@ class Agent:
 			# print_output=False is required: the hub's stdout must not be written
 			# to our stdout, which carries the JSON protocol.
 			await self.hub.run(path, wait=True, print_output=False)
+		except Exception as e:
+			# Observed on hardware: the hub rejects a program download with GATT
+			# application error 0x81 while a program is still running. Translate it
+			# rather than surfacing a raw bleak exception.
+			text = str(e)
+			if "0x81" in text or "Application-specific" in text:
+				raise RuntimeError(
+					"the hub refused the program download, which normally means a "
+					"program is still running on it. Press Stop, then Run again."
+				) from e
+			raise
 		finally:
 			try:
 				subscription.dispose()

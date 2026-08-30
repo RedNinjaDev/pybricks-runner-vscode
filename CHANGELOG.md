@@ -2,6 +2,29 @@
 
 All notable changes to the "pybricks-runner" extension will be documented in this file.
 
+## [0.4.5] - 2026-08-30
+
+### Verified on hardware (SPIKE Prime, Pybricks, pybricksdev 2.3.2, BlueZ)
+Connect, upload, live stdout streaming, tracebacks from a failing program, stop and
+disconnect all behave correctly over a held connection.
+
+### Corrected
+- The 0.4.2 notes described running a program on a busy hub as *hanging* in
+  `_wait_for_user_program_stop`. On hardware it does not hang: the hub rejects the
+  **download** with GATT application error `0x81` in about 0.2s, before the program
+  is ever started. The guard added in 0.4.2 is still correct and necessary —
+  stopping the running program first turns that failure into a successful run — but
+  the mechanism described was wrong.
+
+### Fixed
+- That rejection surfaced as a raw `BleakGATTProtocolError`. It is now reported as
+  "the hub refused the program download, which normally means a program is still
+  running on it. Press Stop, then Run again."
+- pybricksdev draws a tqdm progress bar on stderr while downloading, which the
+  extension logged verbatim on every run. Progress-bar lines are now filtered out of
+  the log; genuine stderr is still recorded.
+
+
 ## [0.4.4] - 2026-08-30
 
 ### Fixed
