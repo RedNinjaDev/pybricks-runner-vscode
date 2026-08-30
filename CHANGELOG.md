@@ -2,6 +2,25 @@
 
 All notable changes to the "pybricks-runner" extension will be documented in this file.
 
+## [0.4.3] - 2026-08-30
+
+### Fixed
+- **The 0.4.2 fix could miss an already-running program.** `connect()` subscribes to
+  the Pybricks event characteristic but never reads the status, so
+  `status_observable` holds its placeholder `StatusFlag(0)` until the hub sends its
+  first `STATUS_REPORT`. Reading that value straight after connecting reported "no
+  program running" regardless of the truth, so the guard added in 0.4.2 could be
+  skipped and the hang would return. The agent now waits (up to 2s) for the hub's
+  first real status report before deciding.
+- Status logging no longer presents the placeholder zero as though it were hub
+  state; it says "not yet reported by the hub" until a report arrives. If none
+  arrives, the run proceeds and the log records that the hub's state is unknown.
+
+### Changed
+- The internal `status` command also reports `status_seen`, `running_program` and
+  `selected_slot`.
+
+
 ## [0.4.2] - 2026-08-30
 
 ### Fixed

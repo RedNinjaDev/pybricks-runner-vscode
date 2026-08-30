@@ -33,6 +33,8 @@ import threading
 # How long to wait for the hub to clear its user-program-running flag.
 STOP_TIMEOUT = 3.0
 POLL_INTERVAL = 0.1
+# How long to wait for the hub's first real STATUS_REPORT after connecting.
+STATUS_TIMEOUT = 2.0
 
 
 class Agent:
@@ -41,6 +43,10 @@ class Agent:
 		self.device_name = None
 		self.subscriptions = []
 		self.run_task = None
+		# status_observable is a BehaviorSubject seeded with StatusFlag(0); connect()
+		# only subscribes, it never reads the status characteristic. Until the hub
+		# sends its first STATUS_REPORT that zero is a placeholder, not hub state.
+		self._status_seen = False
 		self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 		# stdout_observable may fire from a different thread than the event loop.
 		self._write_lock = threading.Lock()
@@ -98,6 +104,19 @@ class Agent:
 			hub.connection_state_observable.subscribe(self._on_connection_state)
 		)
 
+		self._status_seen = False
+		replayed = [True]
+
+		def on_status(_flags):
+			# The BehaviorSubject replays its seed value on subscribe; only
+			# emissions after that are genuine reports from the hub.
+			if replayed[0]:
+				replayed[0] = False
+				return
+			self._status_seen = True
+
+		self.subscriptions.append(hub.status_observable.subscribe(on_status))
+
 		try:
 			await hub.connect()
 		except Exception:
@@ -106,7 +125,7 @@ class Agent:
 
 		self.hub = hub
 		self.device_name = getattr(device, "name", None) or name
-		self.emit(event="log", text=f"hub status at connect: {self._status_flags():#x}")
+		self.emit(event="log", text=f"hub status at connect: {self._describe_status()}")
 		self.emit(
 			event="state",
 			state="connected",
@@ -120,6 +139,25 @@ class Agent:
 		except Exception:  # noqa: BLE001 - diagnostics must never break a run
 			return 0
 
+	def _describe_status(self):
+		if not self._status_seen:
+			return "not yet reported by the hub"
+		return f"{self._status_flags():#x}"
+
+	async def _await_status(self):
+		"""Wait for the hub's first real STATUS_REPORT.
+
+		Without this the cached zero would be read as "no program running" and
+		any already-running program would be missed.
+		"""
+		if self._status_seen:
+			return True
+		for _ in range(int(STATUS_TIMEOUT / POLL_INTERVAL)):
+			await asyncio.sleep(POLL_INTERVAL)
+			if self._status_seen:
+				return True
+		return False
+
 	async def _ensure_idle(self):
 		"""Stop any program already running on the hub.
 
@@ -130,6 +168,15 @@ class Agent:
 		first is what makes the run take effect.
 		"""
 		from pybricksdev.ble.pybricks import StatusFlag
+
+		if not await self._await_status():
+			# Proceed anyway rather than refusing to run, but say so: if the run
+			# then hangs, this line in the log is the explanation.
+			self.emit(event="log", text=(
+				"hub sent no status report within "
+				f"{STATUS_TIMEOUT}s; cannot tell whether a program is running"
+			))
+			return False
 
 		if not (self._status_flags() & StatusFlag.USER_PROGRAM_RUNNING):
 			return False
@@ -160,7 +207,7 @@ class Agent:
 		from pybricksdev.ble.pybricks import StatusFlag
 
 		self.run_task = asyncio.current_task()
-		self.emit(event="log", text=f"hub status before run: {self._status_flags():#x}")
+		self.emit(event="log", text=f"hub status before run: {self._describe_status()}")
 		await self._ensure_idle()
 
 		# "started" means the upload has begun; "running" is emitted once the hub
@@ -199,6 +246,9 @@ class Agent:
 			connected=self.hub is not None,
 			name=self.device_name,
 			flags=self._status_flags(),
+			status_seen=self._status_seen,
+			running_program=getattr(self.hub, "_running_program", None) if self.hub else None,
+			selected_slot=getattr(self.hub, "_selected_slot", None) if self.hub else None,
 		)
 
 	async def cmd_disconnect(self, msg):
