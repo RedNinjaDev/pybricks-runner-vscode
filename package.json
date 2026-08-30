@@ -2,7 +2,7 @@
   "name": "pybricks-runner",
   "displayName": "Pybricks Runner",
   "description": "Program LEGO SPIKE Prime and EV3 robots using Pybricks",
-  "version": "0.4.8",
+  "version": "0.4.0",
   "publisher": "AnandSingh",
   "icon": "pybricks-runner-icon.png",
   "engines": {
@@ -46,116 +46,61 @@
     "commands": [
       {
         "command": "pybricks.run",
-        "title": "Run on LEGO Brick",
-        "category": "Pybricks",
-        "icon": "$(rocket)"
-      },
-      {
-        "command": "pybricks.stopProgram",
-        "title": "Stop Running Program",
-        "category": "Pybricks",
-        "icon": "$(debug-stop)"
-      },
-      {
-        "command": "pybricks.connectHub",
-        "title": "Connect to Hub",
-        "category": "Pybricks",
-        "icon": "$(plug)"
-      },
-      {
-        "command": "pybricks.disconnectHub",
-        "title": "Disconnect from Hub",
-        "category": "Pybricks",
-        "icon": "$(debug-disconnect)"
-      },
-      {
-        "command": "pybricks.toggleConnection",
-        "title": "Connect / Disconnect Hub",
-        "category": "Pybricks"
+        "title": "\ud83d\ude80 Run on LEGO Brick"
       },
       {
         "command": "pybricks.selectRobot",
-        "title": "Select LEGO Robot",
-        "category": "Pybricks",
-        "icon": "$(settings-gear)"
+        "title": "\ud83d\udd27 Select LEGO Robot"
       },
       {
         "command": "pybricks.scanDevices",
-        "title": "Scan for Devices",
-        "category": "Pybricks",
+        "title": "Pybricks: Scan for Devices",
         "icon": "$(search)"
       },
       {
         "command": "pybricks.refreshDevices",
-        "title": "Refresh Device List",
-        "category": "Pybricks",
+        "title": "Pybricks: Refresh Devices",
         "icon": "$(refresh)"
       },
       {
-        "command": "pybricks.addRobot",
-        "title": "Add Robot by Name",
-        "category": "Pybricks",
-        "icon": "$(add)"
+        "command": "pybricks.connect",
+        "title": "Pybricks: Connect"
       },
       {
-        "command": "pybricks.selectDevice",
-        "title": "Set as Target",
-        "category": "Pybricks",
-        "icon": "$(circle-filled)"
-      },
-      {
-        "command": "pybricks.deselectDevice",
-        "title": "Clear Target",
-        "category": "Pybricks",
-        "icon": "$(circle-large-outline)"
+        "command": "pybricks.disconnect",
+        "title": "Pybricks: Disconnect"
       },
       {
         "command": "pybricks.forgetDevice",
-        "title": "Remove from Saved List",
-        "category": "Pybricks",
+        "title": "Pybricks: Remove from Saved List",
         "icon": "$(trash)"
       },
       {
         "command": "pybricks.manageSavedDevices",
-        "title": "Remove Saved Robots...",
-        "category": "Pybricks",
-        "icon": "$(list-selection)"
+        "title": "Pybricks: Remove Saved Robots..."
       },
       {
         "command": "pybricks.clearSavedDevices",
-        "title": "Remove All Saved Robots",
-        "category": "Pybricks",
-        "icon": "$(clear-all)"
+        "title": "Pybricks: Remove All Saved Robots"
       },
       {
         "command": "pybricks.showLog",
-        "title": "Show Log",
-        "category": "Pybricks",
-        "icon": "$(output)"
+        "title": "Pybricks: Show Log"
       },
       {
         "command": "pybricks.showDebugInfo",
-        "title": "Show Debug Info",
-        "category": "Pybricks",
-        "icon": "$(bug)"
+        "title": "Pybricks: Show Debug Info"
       }
     ],
     "menus": {
       "editor/title": [
         {
           "command": "pybricks.run",
-          "group": "navigation@1",
-          "when": "resourceExtname == .py"
-        },
-        {
-          "command": "pybricks.stopProgram",
-          "group": "navigation@2",
-          "when": "resourceExtname == .py && pybricks.connected"
+          "group": "navigation"
         },
         {
           "command": "pybricks.selectRobot",
-          "group": "navigation@3",
-          "when": "resourceExtname == .py"
+          "group": "navigation"
         }
       ],
       "view/title": [
@@ -165,112 +110,45 @@
           "group": "navigation@1"
         },
         {
-          "command": "pybricks.connectHub",
-          "when": "view == pybricks.devices && !pybricks.connected",
-          "group": "navigation@2"
-        },
-        {
-          "command": "pybricks.disconnectHub",
-          "when": "view == pybricks.devices && pybricks.connected",
-          "group": "navigation@2"
-        },
-        {
-          "command": "pybricks.addRobot",
-          "when": "view == pybricks.devices",
-          "group": "navigation@3"
-        },
-        {
-          "command": "pybricks.stopProgram",
-          "when": "view == pybricks.devices && pybricks.connected",
-          "group": "1_hub@1"
-        },
-        {
           "command": "pybricks.refreshDevices",
           "when": "view == pybricks.devices",
-          "group": "2_list@1"
+          "group": "navigation@2"
         },
         {
           "command": "pybricks.manageSavedDevices",
           "when": "view == pybricks.devices",
-          "group": "3_manage@1"
+          "group": "1_manage@1"
         },
         {
           "command": "pybricks.clearSavedDevices",
           "when": "view == pybricks.devices",
-          "group": "3_manage@2"
+          "group": "1_manage@2"
         },
         {
           "command": "pybricks.showLog",
           "when": "view == pybricks.devices",
-          "group": "4_debug@1"
+          "group": "2_debug@1"
         }
       ],
       "view/item/context": [
         {
-          "command": "pybricks.connectHub",
-          "when": "view == pybricks.devices && viewItem =~ /\\.offline\\b/",
-          "group": "inline@1"
-        },
-        {
-          "command": "pybricks.disconnectHub",
-          "when": "view == pybricks.devices && viewItem =~ /\\.connected\\b/",
-          "group": "inline@1"
-        },
-        {
           "command": "pybricks.forgetDevice",
           "when": "view == pybricks.devices && viewItem =~ /\\.saved\\b/",
-          "group": "inline@2"
+          "group": "inline"
         },
         {
-          "command": "pybricks.connectHub",
-          "when": "view == pybricks.devices && viewItem =~ /\\.offline\\b/",
-          "group": "1_hub@1"
+          "command": "pybricks.connect",
+          "when": "view == pybricks.devices && viewItem =~ /\\.unselected\\b/"
         },
         {
-          "command": "pybricks.disconnectHub",
-          "when": "view == pybricks.devices && viewItem =~ /\\.connected\\b/",
-          "group": "1_hub@1"
-        },
-        {
-          "command": "pybricks.selectDevice",
-          "when": "view == pybricks.devices && viewItem =~ /\\.unselected\\b/",
-          "group": "2_select@1"
-        },
-        {
-          "command": "pybricks.deselectDevice",
-          "when": "view == pybricks.devices && viewItem =~ /\\.selected\\b/",
-          "group": "2_select@1"
-        },
-        {
-          "command": "pybricks.forgetDevice",
-          "when": "view == pybricks.devices && viewItem =~ /\\.saved\\b/",
-          "group": "3_remove@1"
+          "command": "pybricks.disconnect",
+          "when": "view == pybricks.devices && viewItem =~ /\\.selected\\b/"
         }
       ],
       "commandPalette": [
         {
           "command": "pybricks.forgetDevice",
           "when": "false"
-        },
-        {
-          "command": "pybricks.selectDevice",
-          "when": "false"
-        },
-        {
-          "command": "pybricks.toggleConnection",
-          "when": "false"
-        },
-        {
-          "command": "pybricks.stopProgram",
-          "when": "pybricks.connected"
-        },
-        {
-          "command": "pybricks.disconnectHub",
-          "when": "pybricks.connected"
-        },
-        {
-          "command": "pybricks.connectHub",
-          "when": "!pybricks.connected"
         }
       ]
     },
@@ -293,32 +171,13 @@
           "type": "boolean",
           "default": false,
           "description": "Report every named Bluetooth LE device, not just LEGO hubs. Useful for troubleshooting a hub that does not show up."
-        },
-        "pybricksRunner.scanOnStartup": {
-          "type": "boolean",
-          "default": false,
-          "description": "Scan for nearby hubs automatically when the extension activates."
-        },
-        "pybricksRunner.connectTimeout": {
-          "type": "number",
-          "default": 15,
-          "minimum": 1,
-          "maximum": 120,
-          "description": "How long, in seconds, to look for the hub when connecting."
-        },
-        "pybricksRunner.startTimeout": {
-          "type": "number",
-          "default": 30,
-          "minimum": 5,
-          "maximum": 300,
-          "description": "How long, in seconds, to allow for sending a program to the hub before treating the transfer as stalled. Only the transfer is timed; a running program is never interrupted."
         }
       }
     },
     "viewsWelcome": [
       {
         "view": "pybricks.devices",
-        "contents": "No robots yet.\n\nPower on your hub and hold its Bluetooth button until it blinks, then scan.\n[Scan for Devices](command:pybricks.scanDevices)\n\nAlready know the name? Add it directly.\n[Add Robot by Name](command:pybricks.addRobot)"
+        "contents": "No robots yet.\n\nPower on your hub and hold its Bluetooth button until it blinks, then scan.\n[Scan for Devices](command:pybricks.scanDevices)\n\nAlready know the name?\n[Select LEGO Robot](command:pybricks.selectRobot)"
       }
     ]
   },

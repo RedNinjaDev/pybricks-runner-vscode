@@ -18,7 +18,6 @@
 - **One-click programming:** Run your Python code on LEGO robots with a single click
 - **Activity bar integration:** Dedicated sidebar with device management
 - **Bluetooth device scanning:** Discover nearby hubs by their advertised BLE name, with signal strength
-- **Stay connected:** Hold an open connection to a hub so it leaves advertising mode, then send programs over that link
 - **Manage your robot list:** Remove robots you no longer use, one at a time or in bulk
 - **Simple integration:** Uses the `pybricksdev` CLI tool via VS Code terminal
 - **Immediate feedback:** See output and errors directly in the integrated terminal
@@ -43,30 +42,6 @@ Hubs found by a scan are *not* saved automatically; a hub is remembered once you
 If a hub never appears, set `pybricksRunner.showAllBluetoothDevices` to `true` to list every
 named BLE device, which makes it obvious whether the adapter is working at all.
 
-### Connecting to a hub
-
-Press **Connect to Hub** (the plug icon in the *Devices* view title bar, the hover
-icon on any device row, or the status bar item) to open a real BLE connection.
-
-Once connected the hub **stops advertising** — its Bluetooth light goes solid instead
-of blinking — and stays that way until you disconnect. Programs are then sent over the
-open link, so each run skips the scan-and-connect handshake and starts noticeably faster.
-Program output streams into a **Pybricks Hub** terminal, and **Stop Running Program**
-halts a program without dropping the connection.
-
-**A Pybricks hub accepts only one connection at a time.** That has a few consequences
-worth knowing:
-
-- While connected, the hub will not show up in a scan, because it is no longer advertising.
-  The extension warns you if you scan anyway, and keeps showing it as connected.
-- `pybricksdev run ble` opens its own connection, so it cannot be used while the extension
-  holds one. Run from the extension instead, or disconnect first.
-- Selecting a different robot disconnects the current one first, and tells you it did.
-
-If you never connect, nothing changes: **Run on LEGO Brick** falls back to the original
-behaviour of shelling out to `pybricksdev run ble`, which connects for the duration of
-the program and then disconnects.
-
 ### Removing old devices
 
 Robot names accumulate over time. To clean them up:
@@ -85,8 +60,6 @@ stops being passed a stale `--name`.
 | --- | --- | --- |
 | `pybricksRunner.scanTimeout` | `5` | How long, in seconds, to scan for nearby hubs |
 | `pybricksRunner.showAllBluetoothDevices` | `false` | Report every named BLE device, not just LEGO hubs |
-| `pybricksRunner.scanOnStartup` | `false` | Scan automatically when the extension activates |
-| `pybricksRunner.connectTimeout` | `15` | How long, in seconds, to look for the hub when connecting |
 
 If a scan fails, the reason is shown and also written to the **Pybricks Runner** output
 channel (*Devices* view `...` menu → *Show Log*).

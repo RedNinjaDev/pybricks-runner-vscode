@@ -1,5 +1,5 @@
 const vscode = require('vscode');
-const { exec, execFile, spawn } = require('child_process');
+const { exec, execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -10,11 +10,8 @@ let globalState;
 let extensionPath;
 let output;
 
-// Most recent BLE scan, reused when the tree is redrawn without rescanning.
+// Most recent scan, reused when the tree is redrawn without rescanning.
 let lastScan = { devices: [], error: null, at: 0 };
-
-// Live connection state, driven by events from the hub agent.
-let hub = { state: 'disconnected', name: null, address: null, programRunning: false, programState: 'idle' };
 
 function log(message) {
 	if (output) output.appendLine(`[${new Date().toLocaleTimeString()}] ${message}`);
@@ -44,7 +41,6 @@ async function addRobotName(name) {
 	const list = getRobotNameList();
 	if (!name || list.includes(name)) return false;
 	await setRobotNameList([...list, name]);
-	log(`Saved robot "${name}"`);
 	return true;
 }
 
@@ -62,7 +58,6 @@ async function removeRobotNames(names) {
 		await setRobotName(DEFAULT_ROBOT_NAME);
 	}
 
-	log(`Removed ${list.length - kept.length} saved robot(s): ${[...doomed].join(', ')}`);
 	return list.length - kept.length;
 }
 
@@ -94,8 +89,8 @@ function getPybricksdevCommand(showDebug = false) {
 	return 'pybricksdev';
 }
 
-// Helper scripts run on the interpreter that owns pybricksdev, so bleak and
-// pybricksdev itself are always importable.
+// The scanner runs on the interpreter that owns pybricksdev, so bleak - which
+// pybricksdev already depends on - is guaranteed to be importable.
 function getPythonCommand() {
 	const candidates = process.platform === 'win32'
 		? [getVenvExecutable('python')]
@@ -111,10 +106,6 @@ function getPythonCommand() {
 // Only used for the PATH fallback, where the command name itself has no spaces.
 function quoteArg(value) {
 	return /[\s"]/.test(value) ? `"${String(value).replace(/"/g, '\\"')}"` : String(value);
-}
-
-function scriptPath(name) {
-	return path.join(extensionPath, 'scripts', name);
 }
 
 // ============================================================================
@@ -138,7 +129,7 @@ function scanForDevices() {
 	const includeAll = config.get('showAllBluetoothDevices', false);
 
 	const python = getPythonCommand();
-	const args = [scriptPath('ble_scan.py'), '--timeout', String(timeout)];
+	const args = [path.join(extensionPath, 'scripts', 'ble_scan.py'), '--timeout', String(timeout)];
 	if (includeAll) args.push('--all');
 
 	log(`Scanning for ${timeout}s using ${python}${includeAll ? ' (all BLE devices)' : ''}`);
@@ -206,182 +197,10 @@ function buildDeviceList() {
 		byName.set(selected, { name: selected, nearby: false, saved: false });
 	}
 
-	// A connected hub stops advertising, so it will not appear in a scan.
-	if (hub.name && !byName.has(hub.name)) {
-		byName.set(hub.name, { name: hub.name, nearby: false, saved: false });
-	}
-
-	const rank = d => (d.connected ? 0 : d.selected ? 1 : d.nearby ? 2 : 3);
+	const rank = d => (d.selected ? 0 : d.nearby ? 1 : 2);
 	return [...byName.values()]
-		.map(d => ({
-			...d,
-			selected: d.name === selected,
-			connected: hub.state === 'connected' && d.name === hub.name,
-			connecting: hub.state === 'connecting' && d.name === hub.name
-		}))
+		.map(d => ({ ...d, selected: d.name === selected }))
 		.sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
-}
-
-// ============================================================================
-// HUB AGENT
-// ============================================================================
-
-// Owns the long-lived Python process that holds the BLE connection. Commands
-// are request/response by id; everything else arrives as an unsolicited event.
-class HubAgent {
-	constructor(onEvent) {
-		this.onEvent = onEvent;
-		this.proc = null;
-		this.buffer = '';
-		this.nextId = 1;
-		this.pending = new Map();
-	}
-
-	isRunning() {
-		return this.proc !== null;
-	}
-
-	start() {
-		if (this.proc) return;
-
-		const python = getPythonCommand();
-		log(`Starting hub agent: ${python} ${scriptPath('hub_agent.py')}`);
-		// -u so the agent's JSON lines are not held in a pipe buffer.
-		this.proc = spawn(python, ['-u', scriptPath('hub_agent.py')], { stdio: ['pipe', 'pipe', 'pipe'] });
-
-		this.proc.stdout.setEncoding('utf8');
-		this.proc.stdout.on('data', chunk => this._consume(chunk));
-		this.proc.stderr.setEncoding('utf8');
-		this.proc.stderr.on('data', chunk => {
-			// pybricksdev renders a tqdm progress bar to stderr while downloading a
-			// program. It is not an error and would swamp the log on every run.
-			for (const line of String(chunk).split(/[\r\n]+/)) {
-				const text = line.trim();
-				if (!text || /^\d{1,3}%\|/.test(text)) continue;
-				log(`[agent stderr] ${text}`);
-			}
-		});
-
-		this.proc.on('error', err => this._die(`agent failed to start: ${err.message}`));
-		this.proc.on('exit', (code, signal) => {
-			this._die(`agent exited (${signal || `code ${code}`})`);
-		});
-	}
-
-	_consume(chunk) {
-		this.buffer += chunk;
-		let index;
-		while ((index = this.buffer.indexOf('\n')) >= 0) {
-			const line = this.buffer.slice(0, index).trim();
-			this.buffer = this.buffer.slice(index + 1);
-			if (!line) continue;
-
-			let message;
-			try {
-				message = JSON.parse(line);
-			} catch {
-				log(`[agent] unparsable line: ${line}`);
-				continue;
-			}
-
-			if (message.event === 'result') {
-				const waiter = this.pending.get(message.id);
-				if (waiter) {
-					this.pending.delete(message.id);
-					if (message.ok) waiter.resolve(message);
-					else waiter.reject(new Error(message.error || 'command failed'));
-				}
-				continue;
-			}
-
-			this.onEvent(message);
-		}
-	}
-
-	_die(reason) {
-		if (!this.proc) return;
-		this.proc = null;
-		this.buffer = '';
-		log(`Hub agent stopped: ${reason}`);
-
-		for (const waiter of this.pending.values()) {
-			waiter.reject(new Error(reason));
-		}
-		this.pending.clear();
-
-		this.onEvent({ event: 'state', state: 'disconnected', reason });
-	}
-
-	send(cmd, payload = {}) {
-		if (!this.proc) return Promise.reject(new Error('hub agent is not running'));
-
-		const id = this.nextId++;
-		const line = JSON.stringify({ id, cmd, ...payload }) + '\n';
-
-		return new Promise((resolve, reject) => {
-			this.pending.set(id, { resolve, reject });
-			this.proc.stdin.write(line, err => {
-				if (err) {
-					this.pending.delete(id);
-					reject(err);
-				}
-			});
-		});
-	}
-
-	async shutdown() {
-		if (!this.proc) return;
-		const proc = this.proc;
-		try {
-			await this.send('shutdown');
-		} catch {
-			// Agent already gone; fall through to the kill below.
-		}
-		if (proc && !proc.killed) proc.kill();
-		this.proc = null;
-	}
-}
-
-// ============================================================================
-// HUB OUTPUT TERMINAL
-// ============================================================================
-
-let hubTerminal = null;
-let hubWriter = null;
-let hubTerminalOpen = false;
-let hubPending = [];
-
-function ensureHubTerminal() {
-	if (hubTerminal) return;
-
-	hubWriter = new vscode.EventEmitter();
-	const pty = {
-		onDidWrite: hubWriter.event,
-		open: () => {
-			hubTerminalOpen = true;
-			for (const text of hubPending) hubWriter.fire(text);
-			hubPending = [];
-		},
-		close: () => {
-			hubTerminalOpen = false;
-		}
-	};
-
-	hubTerminal = vscode.window.createTerminal({ name: 'Pybricks Hub', pty });
-}
-
-function hubWrite(text) {
-	ensureHubTerminal();
-	const normalized = String(text).replace(/\r?\n/g, '\r\n');
-	if (hubTerminalOpen) hubWriter.fire(normalized);
-	else hubPending.push(normalized);
-}
-
-function disposeHubTerminal() {
-	hubTerminal = null;
-	hubWriter = null;
-	hubTerminalOpen = false;
-	hubPending = [];
 }
 
 // ============================================================================
@@ -402,21 +221,10 @@ class SelectedRobotView {
 	}
 	refresh() {
 		if (!this.view) return;
-
 		const robotName = escapeHtml(getRobotName());
-		const status = hub.state === 'connected'
-			? (hub.programState === 'running' ? 'Connected — program running'
-				: hub.programState === 'uploading' ? 'Connected — uploading'
-				: 'Connected')
-			: hub.state === 'connecting' ? 'Connecting...' : 'Not connected';
-		const color = hub.state === 'connected'
-			? 'var(--vscode-testing-iconPassed, #3fb950)'
-			: 'var(--vscode-descriptionForeground)';
-
 		this.view.webview.html = `
 		<div style="padding:12px;font-family:var(--vscode-font-family)">
 		  <h3 style="margin:0 0 8px;color:var(--vscode-foreground)">🤖 ${robotName}</h3>
-		  <p style="margin:0 0 4px;color:${color};font-size:12px">${escapeHtml(status)}</p>
 		  <p style="margin:0;color:var(--vscode-descriptionForeground);font-size:12px">
 		    Currently selected robot
 		  </p>
@@ -430,57 +238,36 @@ class DeviceItem extends vscode.TreeItem {
 		this.name = device.name;
 
 		// Dot-separated tokens so package.json `when` clauses can match on
-		// selection, connection and whether the entry is removable.
+		// selection state and on whether the entry is removable.
 		const tokens = ['device', device.selected ? 'selected' : 'unselected'];
-		tokens.push(device.connected ? 'connected' : 'offline');
 		if (device.saved) tokens.push('saved');
 		if (device.nearby) tokens.push('nearby');
 		this.contextValue = tokens.join('.');
 
 		const labels = [];
-		if (device.connected) labels.push(device.programRunning ? 'connected · running' : 'connected');
-		else if (device.connecting) labels.push('connecting...');
 		if (device.selected) labels.push('selected');
-		if (!device.connected) {
-			if (device.nearby) {
-				labels.push(typeof device.rssi === 'number' ? `nearby (${device.rssi} dBm)` : 'nearby');
-			} else if (device.saved) {
-				labels.push('saved');
-			}
+		if (device.nearby) {
+			labels.push(typeof device.rssi === 'number' ? `nearby (${device.rssi} dBm)` : 'nearby');
+		} else if (device.saved) {
+			labels.push('saved');
 		}
 		if (device.kind === 'lwp3') labels.push('no Pybricks firmware');
 		this.description = labels.join(' · ');
 
-		if (device.connected) {
-			this.iconPath = new vscode.ThemeIcon('vm-active', new vscode.ThemeColor('charts.green'));
-		} else if (device.connecting) {
-			this.iconPath = new vscode.ThemeIcon('sync~spin');
-		} else if (device.selected) {
-			this.iconPath = new vscode.ThemeIcon('circle-filled');
-		} else if (device.nearby) {
-			this.iconPath = new vscode.ThemeIcon('broadcast');
-		} else {
-			this.iconPath = new vscode.ThemeIcon('circle-large-outline');
-		}
+		this.iconPath = new vscode.ThemeIcon(
+			device.selected ? 'circle-filled' : device.nearby ? 'broadcast' : 'circle-large-outline'
+		);
 
 		const tooltip = new vscode.MarkdownString();
 		tooltip.appendMarkdown(`**${device.name}**\n\n`);
 		if (device.address) tooltip.appendMarkdown(`Address: \`${device.address}\`\n\n`);
-		if (device.connected) {
-			tooltip.appendMarkdown('Connected. The hub has stopped advertising and programs are sent over this link.');
-		} else if (device.nearby) {
-			tooltip.appendMarkdown('Advertising right now — ready to connect.');
-		} else {
-			tooltip.appendMarkdown('Saved, not seen in the last scan.');
-		}
+		tooltip.appendMarkdown(device.nearby ? 'Advertising right now.' : 'Saved, not seen in the last scan.');
 		if (device.kind === 'lwp3') {
-			tooltip.appendMarkdown('\n\nThis hub is running LEGO firmware, not Pybricks. Flash Pybricks before running programs on it.');
+			tooltip.appendMarkdown('\n\nThis hub is running LEGO firmware, not Pybricks.');
 		}
 		this.tooltip = tooltip;
 
-		if (!device.connected) {
-			this.command = { command: 'pybricks.selectDevice', title: 'Select', arguments: [device.name] };
-		}
+		this.command = { command: 'pybricks.connect', title: 'Select', arguments: [device.name] };
 	}
 }
 
@@ -491,7 +278,7 @@ class DevicesProvider {
 		this.devices = [];
 	}
 	refresh() {
-		this.devices = buildDeviceList().map(d => new DeviceItem({ ...d, programState: hub.programState }));
+		this.devices = buildDeviceList().map(d => new DeviceItem(d));
 		this._onDidChangeTreeData.fire();
 	}
 	getTreeItem(e) { return e; }
@@ -502,6 +289,7 @@ class DevicesProvider {
 // PICKERS
 // ============================================================================
 
+// The tree passes a name string, the context menu passes the TreeItem itself.
 function nameOf(arg) {
 	if (!arg) return null;
 	if (typeof arg === 'string') return arg;
@@ -607,22 +395,16 @@ function pickRobot(onListChanged) {
 function activate(context) {
 	globalState = context.globalState;
 	extensionPath = context.extensionPath;
-	hub = { state: 'disconnected', name: null, address: null, programRunning: false, programState: 'idle' };
 	lastScan = { devices: [], error: null, at: 0 };
 
 	output = vscode.window.createOutputChannel('Pybricks Runner');
 	context.subscriptions.push(output);
 
-	const runStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-	runStatusItem.command = 'pybricks.run';
-	runStatusItem.tooltip = 'Run current Python file on robot';
-	runStatusItem.show();
-
-	const connectionStatusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 99);
-	connectionStatusItem.command = 'pybricks.toggleConnection';
-	connectionStatusItem.show();
-
-	context.subscriptions.push(runStatusItem, connectionStatusItem);
+	const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+	statusBarItem.command = 'pybricks.run';
+	statusBarItem.tooltip = 'Run current Python file on robot using pybricksdev';
+	statusBarItem.show();
+	context.subscriptions.push(statusBarItem);
 
 	let pybricksTerminal;
 
@@ -635,248 +417,25 @@ function activate(context) {
 	);
 
 	const refreshUi = () => {
-		runStatusItem.text = '$(rocket) Run on ' + getRobotName();
-
-		if (hub.state === 'connected') {
-			connectionStatusItem.text = hub.programState === 'running'
-				? `$(debug-stop) ${hub.name}: running`
-				: hub.programState === 'uploading'
-					? `$(sync~spin) ${hub.name}: uploading`
-					: `$(vm-active) ${hub.name}: connected`;
-			connectionStatusItem.tooltip = 'Connected. Click to disconnect.';
-		} else if (hub.state === 'connecting') {
-			connectionStatusItem.text = '$(sync~spin) Connecting...';
-			connectionStatusItem.tooltip = 'Connecting to hub';
-		} else {
-			connectionStatusItem.text = '$(debug-disconnect) Not connected';
-			connectionStatusItem.tooltip = 'Click to connect to the selected hub';
-		}
-
-		vscode.commands.executeCommand('setContext', 'pybricks.connected', hub.state === 'connected');
+		statusBarItem.text = '$(rocket) Run on ' + getRobotName();
 		selectedRobotView.refresh();
 		devicesProvider.refresh();
 	};
 
-	// -- hub agent ---------------------------------------------------------
-
-	const agent = new HubAgent(event => {
-		switch (event.event) {
-			case 'state':
-				hub.state = event.state;
-				if (event.state === 'connected') {
-					hub.name = event.name || getRobotName();
-					hub.address = event.address || null;
-					hubWrite(`\r\n\x1b[32m● Connected to ${hub.name}\x1b[0m\r\n`);
-				} else if (event.state === 'connecting') {
-					hub.name = event.name || getRobotName();
-				} else {
-					if (hub.name) hubWrite(`\r\n\x1b[33m○ Disconnected from ${hub.name}\x1b[0m\r\n`);
-					hub.name = null;
-					hub.address = null;
-					hub.programRunning = false;
-					hub.programState = 'idle';
-				}
-				refreshUi();
-				break;
-
-			case 'output':
-				hubWrite(event.text);
-				break;
-
-			case 'program':
-				if (event.status === 'started') {
-					hub.programRunning = true;
-					hub.programState = 'uploading';
-					hubWrite(`\r\n\x1b[36m▶ ${path.basename(event.path || '')}\x1b[0m\r\n`);
-				} else if (event.status === 'running') {
-					hub.programState = 'running';
-				} else {
-					hub.programRunning = false;
-					hub.programState = 'idle';
-					// started=false means the hub never reported the program as
-					// running, so say so rather than implying it ran.
-					hubWrite(event.started === false
-						? '\r\n\x1b[33m■ Ended without starting\x1b[0m\r\n'
-						: '\r\n\x1b[90m■ Program finished\x1b[0m\r\n');
-				}
-				refreshUi();
-				break;
-
-			case 'notice':
-				hubWrite(`\r\n\x1b[33m! ${event.text}\x1b[0m\r\n`);
-				log(event.text);
-				break;
-
-			case 'log':
-				log(`[agent] ${event.text}`);
-				break;
-
-			case 'fatal':
-				log(`Hub agent fatal: ${event.error}`);
-				vscode.window.showErrorMessage(`Pybricks hub agent: ${event.error}`);
-				break;
-
-			default:
-				log(`[agent] ${JSON.stringify(event)}`);
-		}
-	});
-
-	context.subscriptions.push({ dispose: () => agent.shutdown() });
-
-	const connectHub = async () => {
-		if (hub.state === 'connected') {
-			vscode.window.showInformationMessage(`Already connected to ${hub.name}.`);
-			return;
-		}
-
-		let name = getRobotName();
-		if (!name || name === DEFAULT_ROBOT_NAME) {
-			const choice = await vscode.window.showInformationMessage(
-				'No robot selected. Connect to any nearby Pybricks hub?',
-				'Connect to Any',
-				'Select a Robot'
-			);
-			if (choice === 'Select a Robot') {
-				await vscode.commands.executeCommand('pybricks.selectRobot');
-				name = getRobotName();
-				if (!name || name === DEFAULT_ROBOT_NAME) return;
-			} else if (choice === 'Connect to Any') {
-				name = null;
-			} else {
-				return;
-			}
-		}
-
-		agent.start();
-		if (!agent.isRunning()) {
-			vscode.window.showErrorMessage('Could not start the hub agent. See the Pybricks Runner log.');
-			return;
-		}
-
-		const timeout = Math.max(1, vscode.workspace.getConfiguration('pybricksRunner').get('connectTimeout', 15));
-
-		try {
-			await vscode.window.withProgress(
-				{
-					location: vscode.ProgressLocation.Notification,
-					title: `Connecting to ${name || 'any nearby hub'}...`
-				},
-				() => agent.send('connect', { name, timeout })
-			);
-
-			if (name) await addRobotName(name);
-			vscode.window.showInformationMessage(`Connected to ${hub.name || name}. The hub has stopped advertising.`);
-		} catch (e) {
-			hub.state = 'disconnected';
-			hub.name = null;
-			refreshUi();
-			const choice = await vscode.window.showErrorMessage(
-				`Could not connect: ${e.message}`,
-				'Show Log'
-			);
-			if (choice === 'Show Log') output.show();
-		}
-	};
-
-	const disconnectHub = async () => {
-		if (hub.state === 'disconnected') return;
-		try {
-			await agent.send('disconnect');
-		} catch (e) {
-			log(`Disconnect failed: ${e.message}`);
-		}
-		hub.state = 'disconnected';
-		hub.name = null;
-		hub.programRunning = false;
-		hub.programState = 'idle';
-		refreshUi();
-	};
-
-	const runOnConnectedHub = async filePath => {
-		hubWrite('');
-		if (hubTerminal) hubTerminal.show(true);
-		const startTimeout = Math.max(5, vscode.workspace.getConfiguration('pybricksRunner').get('startTimeout', 30));
-		try {
-			await agent.send('run', { path: filePath, timeout: startTimeout });
-		} catch (e) {
-			hub.programRunning = false;
-			hub.programState = 'idle';
-			refreshUi();
-			vscode.window.showErrorMessage(`Run failed: ${e.message}`);
-		}
-	};
-
-	const runViaCli = filePath => {
-		const robotName = getRobotName();
-
-		const args = ['run', 'ble'];
-		if (robotName && robotName !== DEFAULT_ROBOT_NAME) args.push('--name', robotName);
-		args.push(filePath);
-
-		// A terminal launched with shellPath is bound to that command, so start a
-		// fresh one each run rather than reusing the previous.
-		if (pybricksTerminal) {
-			pybricksTerminal.dispose();
-			pybricksTerminal = undefined;
-		}
-
-		const venvExe = getVenvExecutable('pybricksdev');
-		if (fs.existsSync(venvExe)) {
-			// Launch the executable directly, with no shell involved, so no shell's
-			// quoting rules can break it. Sending `"C:\path with space\x.exe" run ...`
-			// to PowerShell fails: it reads the quoted path as a string literal and
-			// rejects the following word ("Unexpected token 'run'").
-			pybricksTerminal = vscode.window.createTerminal({
-				name: 'Pybricks',
-				shellPath: venvExe,
-				shellArgs: args
-			});
-			log(`Running: ${venvExe} ${args.join(' ')}`);
-		} else {
-			// No venv: fall back to PATH. A bare command name contains no spaces, so
-			// it needs no quoting and is safe in bash, cmd and PowerShell alike.
-			pybricksTerminal = vscode.window.createTerminal('Pybricks');
-			const cmd = ['pybricksdev', ...args.map(quoteArg)].join(' ');
-			pybricksTerminal.sendText(cmd);
-			log(`Running via PATH: ${cmd}`);
-		}
-
-		pybricksTerminal.show(true);
-		vscode.window.showInformationMessage(`Programming "${path.basename(filePath)}" to ${robotName}...`);
-	};
-
 	const selectRobotName = async name => {
-		// The hub only accepts one connection, so switching targets means
-		// dropping the current link first.
-		if (hub.state === 'connected' && hub.name !== name) {
-			const previous = hub.name;
-			await disconnectHub();
-			vscode.window.showInformationMessage(`Disconnected from ${previous} to select ${name}.`);
-		}
 		await setRobotName(name || DEFAULT_ROBOT_NAME);
 		if (name && name !== DEFAULT_ROBOT_NAME) await addRobotName(name);
 		refreshUi();
 	};
 
-	const runScan = async ({ silent = false } = {}) => {
-		if (hub.state === 'connected' && !silent) {
-			vscode.window.showWarningMessage(
-				`${hub.name} is connected, so it has stopped advertising and will not appear in a scan.`
-			);
-		}
-
+	const runScan = async () => {
 		const result = await vscode.window.withProgress(
-			{
-				location: silent ? vscode.ProgressLocation.Window : vscode.ProgressLocation.Notification,
-				title: 'Pybricks: scanning for nearby hubs...'
-			},
+			{ location: vscode.ProgressLocation.Notification, title: 'Pybricks: scanning for nearby hubs...' },
 			() => scanForDevices()
 		);
 
 		lastScan = { ...result, at: Date.now() };
 		devicesProvider.refresh();
-
-		if (silent) return result;
 
 		if (result.error) {
 			const choice = await vscode.window.showErrorMessage(`Scan failed: ${result.error}`, 'Show Log');
@@ -892,45 +451,12 @@ function activate(context) {
 		return result;
 	};
 
-	// -- commands ----------------------------------------------------------
-
 	context.subscriptions.push(
 		vscode.commands.registerCommand('pybricks.scanDevices', () => runScan()),
 
-		vscode.commands.registerCommand('pybricks.refreshDevices', () => {
-			devicesProvider.refresh();
-		}),
+		vscode.commands.registerCommand('pybricks.refreshDevices', () => devicesProvider.refresh()),
 
-		vscode.commands.registerCommand('pybricks.connectHub', async (arg) => {
-			const name = nameOf(arg);
-			if (name && name !== getRobotName()) await selectRobotName(name);
-			await connectHub();
-		}),
-
-		vscode.commands.registerCommand('pybricks.disconnectHub', async () => {
-			const name = hub.name;
-			await disconnectHub();
-			if (name) vscode.window.showInformationMessage(`Disconnected from ${name}.`);
-		}),
-
-		vscode.commands.registerCommand('pybricks.toggleConnection', async () => {
-			if (hub.state === 'connected') await vscode.commands.executeCommand('pybricks.disconnectHub');
-			else await connectHub();
-		}),
-
-		vscode.commands.registerCommand('pybricks.stopProgram', async () => {
-			if (hub.state !== 'connected') {
-				vscode.window.showWarningMessage('Not connected to a hub.');
-				return;
-			}
-			try {
-				await agent.send('stop');
-			} catch (e) {
-				vscode.window.showErrorMessage(`Could not stop the program: ${e.message}`);
-			}
-		}),
-
-		vscode.commands.registerCommand('pybricks.selectDevice', async (arg) => {
+		vscode.commands.registerCommand('pybricks.connect', async (arg) => {
 			try {
 				let name = nameOf(arg);
 
@@ -961,27 +487,14 @@ function activate(context) {
 			}
 		}),
 
-		vscode.commands.registerCommand('pybricks.deselectDevice', async () => {
-			await disconnectHub();
+		vscode.commands.registerCommand('pybricks.disconnect', async () => {
 			await setRobotName(DEFAULT_ROBOT_NAME);
 			refreshUi();
-		}),
-
-		vscode.commands.registerCommand('pybricks.addRobot', async () => {
-			const name = await vscode.window.showInputBox({
-				prompt: 'Enter a robot name',
-				placeHolder: 'e.g., SPIKE Prime, EV3, MyRobot'
-			});
-			const trimmed = name && name.trim();
-			if (!trimmed) return;
-			await selectRobotName(trimmed);
-			vscode.window.showInformationMessage(`"${trimmed}" added to robot list`);
 		}),
 
 		vscode.commands.registerCommand('pybricks.forgetDevice', async (arg) => {
 			const name = nameOf(arg);
 			if (!name) return;
-			if (hub.state === 'connected' && hub.name === name) await disconnectHub();
 			await removeRobotNames([name]);
 			refreshUi();
 			vscode.window.showInformationMessage(`Removed "${name}" from the saved list.`);
@@ -998,23 +511,14 @@ function activate(context) {
 			const picks = await vscode.window.showQuickPick(
 				saved.map(name => ({
 					label: name,
-					description: hub.state === 'connected' && hub.name === name
-						? 'connected'
-						: nearbyNames.has(name) ? 'nearby' : 'not seen in last scan'
+					description: nearbyNames.has(name) ? 'nearby' : 'not seen in last scan'
 				})),
-				{
-					canPickMany: true,
-					title: 'Remove Saved Robots',
-					placeHolder: 'Select the robots to forget'
-				}
+				{ canPickMany: true, title: 'Remove Saved Robots', placeHolder: 'Select the robots to forget' }
 			);
 
 			if (!picks || picks.length === 0) return;
 
-			const names = picks.map(p => p.label);
-			if (hub.state === 'connected' && names.includes(hub.name)) await disconnectHub();
-
-			const removed = await removeRobotNames(names);
+			const removed = await removeRobotNames(picks.map(p => p.label));
 			refreshUi();
 			vscode.window.showInformationMessage(`Removed ${removed} saved robot(s).`);
 		}),
@@ -1027,13 +531,10 @@ function activate(context) {
 			}
 
 			const confirm = await vscode.window.showWarningMessage(
-				`Remove all ${saved.length} saved robot(s)?`,
-				{ modal: true },
-				'Remove All'
+				`Remove all ${saved.length} saved robot(s)?`, { modal: true }, 'Remove All'
 			);
 			if (confirm !== 'Remove All') return;
 
-			if (hub.state === 'connected') await disconnectHub();
 			await removeRobotNames(saved);
 			refreshUi();
 		}),
@@ -1055,13 +556,9 @@ function activate(context) {
 			info += `Venv Exists: ${venvExists ? '✓ YES' : '✗ NO'}\n\n`;
 			info += `Looking for pybricksdev at:\n${venvPybricksdev}\n`;
 			info += `pybricksdev Exists: ${pybricksdevExists ? '✓ YES' : '✗ NO'}\n\n`;
-			info += `Python used for helpers: ${getPythonCommand()}\n`;
-			info += `Scanner script: ${scriptPath('ble_scan.py')}\n`;
-			info += `Agent script: ${scriptPath('hub_agent.py')}\n\n`;
+			info += `Python used for scanning: ${getPythonCommand()}\n\n`;
 			info += `Selected robot: ${getRobotName()}\n`;
 			info += `Saved robots: ${getRobotNameList().join(', ') || '(none)'}\n`;
-			info += `Connection: ${hub.state}${hub.name ? ` (${hub.name})` : ''}\n`;
-			info += `Agent running: ${agent.isRunning() ? 'yes' : 'no'}\n`;
 			info += `Last scan: ${lastScan.at ? new Date(lastScan.at).toLocaleString() : '(never)'}\n`;
 			info += `Last scan result: ${lastScan.error ? `error - ${lastScan.error}` : `${lastScan.devices.length} device(s)`}\n\n`;
 
@@ -1089,10 +586,7 @@ function activate(context) {
 				info += '✓ pybricksdev found!\n';
 			}
 
-			const doc = await vscode.workspace.openTextDocument({
-				content: info,
-				language: 'text'
-			});
+			const doc = await vscode.workspace.openTextDocument({ content: info, language: 'text' });
 			await vscode.window.showTextDocument(doc);
 		}),
 
@@ -1109,24 +603,44 @@ function activate(context) {
 				return;
 			}
 
-			// The hub reads the file from disk, so unsaved edits would be ignored.
+			// pybricksdev reads the file from disk, so unsaved edits would be ignored.
 			if (editor.document.isDirty) await editor.document.save();
 
-			if (hub.state === 'connected') {
-				if (hub.programRunning) {
-					const choice = await vscode.window.showWarningMessage(
-						'A program is already running on the hub.',
-						'Stop It',
-						'Cancel'
-					);
-					if (choice !== 'Stop It') return;
-					await vscode.commands.executeCommand('pybricks.stopProgram');
-				}
-				await runOnConnectedHub(filePath);
-				return;
+			const robotName = getRobotName();
+			const args = ['run', 'ble'];
+			if (robotName && robotName !== DEFAULT_ROBOT_NAME) args.push('--name', robotName);
+			args.push(filePath);
+
+			// A terminal launched with shellPath is bound to that command, so start a
+			// fresh one each run rather than reusing the previous.
+			if (pybricksTerminal) {
+				pybricksTerminal.dispose();
+				pybricksTerminal = undefined;
 			}
 
-			runViaCli(filePath);
+			const venvExe = getVenvExecutable('pybricksdev');
+			if (fs.existsSync(venvExe)) {
+				// Launch the executable directly, with no shell involved, so no shell's
+				// quoting rules can break it. Sending `"C:\path with space\x.exe" run ...`
+				// to PowerShell fails: it reads the quoted path as a string literal and
+				// rejects the following word ("Unexpected token 'run'").
+				pybricksTerminal = vscode.window.createTerminal({
+					name: 'Pybricks',
+					shellPath: venvExe,
+					shellArgs: args
+				});
+				log(`Running: ${venvExe} ${args.join(' ')}`);
+			} else {
+				// No venv: fall back to PATH. A bare command name contains no spaces, so
+				// it needs no quoting and is safe in bash, cmd and PowerShell alike.
+				pybricksTerminal = vscode.window.createTerminal('Pybricks');
+				const cmd = ['pybricksdev', ...args.map(quoteArg)].join(' ');
+				pybricksTerminal.sendText(cmd);
+				log(`Running via PATH: ${cmd}`);
+			}
+
+			pybricksTerminal.show(true);
+			vscode.window.showInformationMessage(`Programming "${path.basename(filePath)}" to ${robotName}...`);
 		}),
 
 		vscode.commands.registerCommand('pybricks.selectRobot', async () => {
@@ -1157,14 +671,9 @@ function activate(context) {
 
 	vscode.window.onDidCloseTerminal(terminal => {
 		if (terminal.name === 'Pybricks') pybricksTerminal = undefined;
-		if (terminal === hubTerminal) disposeHubTerminal();
 	});
 
 	refreshUi();
-
-	if (vscode.workspace.getConfiguration('pybricksRunner').get('scanOnStartup', false)) {
-		runScan({ silent: true });
-	}
 
 	if (!globalState.get('pybricksdevChecked')) {
 		const pybricksdevCmd = getPybricksdevCommand(true);
