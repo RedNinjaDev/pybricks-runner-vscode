@@ -2,6 +2,30 @@
 
 All notable changes to the "pybricks-runner" extension will be documented in this file.
 
+## [0.4.7] - 2026-08-30
+
+### Fixed
+- **Run failed on Windows when the user profile path contained a space.** Running
+  without connecting first builds a shell command and sends it to the integrated
+  terminal. Because the path to `pybricksdev.exe` was quoted, the command looked like:
+
+  ```
+  "C:\Users\Lego Masters\.pybricks-venv\Scripts\pybricksdev.exe" run ble --name "Turtle Hub" run_1.py
+  ```
+
+  PowerShell — the default shell on Windows — parses a leading quoted string as a
+  string literal rather than a command, and rejects the next word:
+  `Unexpected token 'run' in expression or statement`. The program never ran. bash is
+  unaffected, which is why Linux worked. This affected the extension as published,
+  not just recent changes.
+
+  The executable is now launched directly with its arguments as argv
+  (`createTerminal({ shellPath, shellArgs })`), so no shell parses the command line
+  and no quoting rules apply. When no virtualenv is present the extension still falls
+  back to `pybricksdev` on PATH, where the bare command name needs no quoting and is
+  safe in bash, cmd and PowerShell alike.
+
+
 ## [0.4.6] - 2026-08-30
 
 ### Added

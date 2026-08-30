@@ -108,6 +108,11 @@ function getPythonCommand() {
 	return process.platform === 'win32' ? 'python' : 'python3';
 }
 
+// Only used for the PATH fallback, where the command name itself has no spaces.
+function quoteArg(value) {
+	return /[\s"]/.test(value) ? `"${String(value).replace(/"/g, '\\"')}"` : String(value);
+}
+
 function scriptPath(name) {
 	return path.join(extensionPath, 'scripts', name);
 }
@@ -803,19 +808,40 @@ function activate(context) {
 
 	const runViaCli = filePath => {
 		const robotName = getRobotName();
-		const pybricksdevCmd = getPybricksdevCommand();
 
-		if (!pybricksTerminal) {
+		const args = ['run', 'ble'];
+		if (robotName && robotName !== DEFAULT_ROBOT_NAME) args.push('--name', robotName);
+		args.push(filePath);
+
+		// A terminal launched with shellPath is bound to that command, so start a
+		// fresh one each run rather than reusing the previous.
+		if (pybricksTerminal) {
+			pybricksTerminal.dispose();
+			pybricksTerminal = undefined;
+		}
+
+		const venvExe = getVenvExecutable('pybricksdev');
+		if (fs.existsSync(venvExe)) {
+			// Launch the executable directly, with no shell involved, so no shell's
+			// quoting rules can break it. Sending `"C:\path with space\x.exe" run ...`
+			// to PowerShell fails: it reads the quoted path as a string literal and
+			// rejects the following word ("Unexpected token 'run'").
+			pybricksTerminal = vscode.window.createTerminal({
+				name: 'Pybricks',
+				shellPath: venvExe,
+				shellArgs: args
+			});
+			log(`Running: ${venvExe} ${args.join(' ')}`);
+		} else {
+			// No venv: fall back to PATH. A bare command name contains no spaces, so
+			// it needs no quoting and is safe in bash, cmd and PowerShell alike.
 			pybricksTerminal = vscode.window.createTerminal('Pybricks');
+			const cmd = ['pybricksdev', ...args.map(quoteArg)].join(' ');
+			pybricksTerminal.sendText(cmd);
+			log(`Running via PATH: ${cmd}`);
 		}
+
 		pybricksTerminal.show(true);
-
-		let cmd = `${pybricksdevCmd} run ble "${filePath}"`;
-		if (robotName && robotName !== DEFAULT_ROBOT_NAME) {
-			cmd = `${pybricksdevCmd} run ble --name "${robotName}" "${filePath}"`;
-		}
-
-		pybricksTerminal.sendText(cmd);
 		vscode.window.showInformationMessage(`Programming "${path.basename(filePath)}" to ${robotName}...`);
 	};
 
