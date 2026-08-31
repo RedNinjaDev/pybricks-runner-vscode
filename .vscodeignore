@@ -1,6 +1,8 @@
+# Development-only
 .vscode/**
 .vscode-test/**
 test/**
+.github/**
 .gitignore
 .yarnrc
 vsc-extension-quickstart.md
@@ -9,3 +11,22 @@ vsc-extension-quickstart.md
 **/eslint.config.mjs
 **/.vscode-test.*
 .env
+__pycache__/**
+**/__pycache__/**
+**/*.pyc
+
+# Release tooling: not needed by anyone installing the extension
+release.sh
+RELEASE_GUIDE.md
+QUICK_RELEASE.md
+
+# Stray copy of package.json committed by accident; nothing reads it
+package.json_logs
+
+# Unused. package.json's icon is pybricks-runner-icon.png; this one is orphaned
+# and was ~40% of the installed size.
+icon.png
+
+# README images. vsce rewrites relative links to absolute GitHub raw URLs, so
+# these are served from the repository and need not ship to every install.
+assets/**

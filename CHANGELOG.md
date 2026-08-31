@@ -43,6 +43,11 @@ All notable changes to the "pybricks-runner" extension will be documented in thi
 - Settings: `pybricksRunner.scanTimeout`, `pybricksRunner.showAllBluetoothDevices`.
 
 ### Changed
+- Package size reduced from 2.31 MB to 44 KB. `icon.png` was orphaned (`package.json`
+  points at `pybricks-runner-icon.png`) and the README GIFs are served from GitHub,
+  because vsce rewrites relative image links to absolute repository URLs. Neither
+  needed shipping to every install. Release tooling and `package.json_logs`, a stray
+  copy of `package.json`, are excluded too.
 - Devices found by a scan are not added to the saved list automatically; a hub is
   remembered when you select it, so the saved list stays something you curate.
 - Removing the selected robot resets the selection, so `run` stops passing a stale
